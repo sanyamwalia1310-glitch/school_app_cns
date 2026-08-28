@@ -9,8 +9,10 @@ import kotlin.concurrent.thread
 
 /** HTTPS bridge for Flask's master-record validation.  It contains no Firebase Admin or SMS key. */
 object FlaskEmailGateway {
-    private const val CONNECT_TIMEOUT_MS = 15_000
-    private const val READ_TIMEOUT_MS = 20_000
+    // Render can need a little time to wake on a free instance. Keep this below a minute,
+    // while showing a clear in-app state instead of failing a valid registration too quickly.
+    private const val CONNECT_TIMEOUT_MS = 20_000
+    private const val READ_TIMEOUT_MS = 45_000
     private val gson = Gson()
 
     class ApiException(message: String, val statusCode: Int) : Exception(message)
@@ -28,6 +30,25 @@ object FlaskEmailGateway {
     fun resendRegistration(token: String, callback: (Result<Unit>) -> Unit) = request(callback) { post("/api/email-registration/resend", mapOf("registration_token" to token)); Unit }
     fun completeRegistration(token: String, firebaseIdToken: String, callback: (Result<String>) -> Unit) = request(callback) { post("/api/email-registration/complete", mapOf("registration_token" to token, "firebase_id_token" to firebaseIdToken))["message"]?.toString().orEmpty() }
     fun requestPasswordReset(role: String, identifier: String, email: String, callback: (Result<String>) -> Unit) = request(callback) { post("/api/password-reset/request", mapOf("role" to role, "identifier" to identifier, "email" to email))["email"]?.toString().orEmpty() }
+    fun upsertStudentMasterRecord(
+        firebaseIdToken: String,
+        studentId: String,
+        fullName: String,
+        rollNumber: String,
+        guardianName: String,
+        email: String,
+        callback: (Result<Unit>) -> Unit
+    ) = request(callback) {
+        post("/api/mobile/admin/student-master-record", mapOf(
+            "firebase_id_token" to firebaseIdToken,
+            "student_id" to studentId,
+            "full_name" to fullName,
+            "roll_no" to rollNumber,
+            "guardian_name" to guardianName,
+            "email" to email
+        ))
+        Unit
+    }
     fun linkedProfiles(firebaseIdToken: String, callback: (Result<List<LinkedProfile>>) -> Unit) = request(callback) {
         val body = post("/api/firebase-session/login", mapOf("firebase_id_token" to firebaseIdToken))
         val items = body["profiles"] as? List<*> ?: emptyList<Any>()

@@ -29,8 +29,10 @@ class RegistrationActivity : BaseActivity() {
     private fun selectedRole() = Role.fromLabel(role.text?.toString().orEmpty()).name.lowercase()
     private fun startRegistration() { val id=identifier.text?.toString().orEmpty().trim(); registeredEmail=email.text?.toString().orEmpty().trim(); registeredPassword=password.text?.toString().orEmpty(); val c=confirm.text?.toString().orEmpty()
         if(id.isBlank()||registeredEmail.isBlank()||registeredPassword.length<8||registeredPassword!=c){ Toast.makeText(this,"Enter a school ID, real email, and matching 8-character password.",Toast.LENGTH_LONG).show(); return }
-        start.isEnabled=false; status.text="Checking school record and email identity..."
-        FirebaseAuth.getInstance().signInWithEmailAndPassword(registeredEmail,registeredPassword).addOnSuccessListener { credential -> credential.user?.getIdToken(true)?.addOnSuccessListener { startRegistrationOnServer(id,c,it.token.orEmpty()) } ?: startRegistrationOnServer(id,c,"") }.addOnFailureListener { startRegistrationOnServer(id,c,"") }
+        start.isEnabled=false; status.text="Checking your school record..."
+        // New emails are created safely on Flask. Do not first sign in to Firebase: that call
+        // is expected to fail for a new email and was causing the misleading timeout.
+        startRegistrationOnServer(id,c,"")
     }
     private fun startRegistrationOnServer(id: String, confirmPassword: String, firebaseIdToken: String) {
         FlaskEmailGateway.startRegistration(
@@ -44,11 +46,17 @@ class RegistrationActivity : BaseActivity() {
                     if (registration.verificationRequired) {
                         FirebaseAuth.getInstance()
                             .signInWithEmailAndPassword(registeredEmail, registeredPassword)
-                            .addOnSuccessListener {
-                                it.user?.sendEmailVerification()
-                                status.text = "Verification email sent. Open it, verify, then tap Continue."
-                                resend.visibility = View.VISIBLE
-                                complete.visibility = View.VISIBLE
+                            .addOnSuccessListener { credential ->
+                                credential.user?.sendEmailVerification()
+                                    ?.addOnSuccessListener {
+                                        status.text = "Verification email sent. Open it, verify, then tap Continue."
+                                        resend.visibility = View.VISIBLE
+                                        complete.visibility = View.VISIBLE
+                                    }
+                                    ?.addOnFailureListener { error ->
+                                        status.text = error.message ?: "Firebase could not send the verification email."
+                                    }
+                                    ?: run { status.text = "Firebase could not start the verification email." }
                             }
                             .addOnFailureListener { error ->
                                 status.text = error.message ?: "Unable to send verification email."
@@ -59,11 +67,42 @@ class RegistrationActivity : BaseActivity() {
                         complete.visibility = View.VISIBLE
                     }
                 }.onFailure { error ->
-                    status.text = error.message ?: "Unable to start registration."
+                    val apiError = error as? FlaskEmailGateway.ApiException
+                    if (apiError?.statusCode == 409) {
+                        verifyExistingEmailAndRetry(id, confirmPassword)
+                    } else {
+                        status.text = error.message ?: "Unable to start registration."
+                    }
                 }
             }
         }
     }
+
+    /** An existing Firebase email may be linked to multiple authorised school profiles. */
+    private fun verifyExistingEmailAndRetry(id: String, confirmPassword: String) {
+        start.isEnabled = false
+        status.text = "Confirming your existing email account..."
+        FirebaseAuth.getInstance().signInWithEmailAndPassword(registeredEmail, registeredPassword)
+            .addOnSuccessListener { credential ->
+                val user = credential.user
+                if (user == null) {
+                    start.isEnabled = true
+                    status.text = "Unable to verify the existing email account."
+                    return@addOnSuccessListener
+                }
+                user.getIdToken(true)
+                    .addOnSuccessListener { token -> startRegistrationOnServer(id, confirmPassword, token.token.orEmpty()) }
+                    .addOnFailureListener { error ->
+                        start.isEnabled = true
+                        status.text = error.message ?: "Unable to verify the existing email account."
+                    }
+            }
+            .addOnFailureListener { error ->
+                start.isEnabled = true
+                status.text = error.message ?: "This email already exists. Enter its correct Firebase password."
+            }
+    }
+
     private fun resendEmail() {
         if (registrationToken.isBlank()) return
         FlaskEmailGateway.resendRegistration(registrationToken) { result ->
@@ -71,9 +110,12 @@ class RegistrationActivity : BaseActivity() {
                 result.onSuccess {
                     FirebaseAuth.getInstance()
                         .signInWithEmailAndPassword(registeredEmail, registeredPassword)
-                        .addOnSuccessListener {
-                            it.user?.sendEmailVerification()
-                            status.text = "Verification email resent."
+                        .addOnSuccessListener { credential ->
+                            credential.user?.sendEmailVerification()
+                                ?.addOnSuccessListener { status.text = "Verification email resent." }
+                                ?.addOnFailureListener { error ->
+                                    status.text = error.message ?: "Firebase could not resend the verification email."
+                                }
                         }
                 }.onFailure { error ->
                     status.text = error.message ?: "Unable to resend email."

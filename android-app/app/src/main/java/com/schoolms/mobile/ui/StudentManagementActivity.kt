@@ -19,9 +19,11 @@ import com.google.android.material.card.MaterialCardView
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
+import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.ktx.Firebase
 import com.google.firebase.storage.ktx.storage
 import com.schoolms.mobile.R
+import com.schoolms.mobile.data.FlaskEmailGateway
 import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
@@ -156,25 +158,65 @@ class StudentManagementActivity : BaseActivity() {
             }
             val selectedClass = studentClassInput.text?.toString().orEmpty()
             val createdUsername = studentUsernameInput.text?.toString().orEmpty().trim().lowercase()
+            val fullName = studentNameInput.text?.toString().orEmpty()
+            val rollNumber = studentRollInput.text?.toString().orEmpty()
+            val guardianContact = studentGuardianInput.text?.toString().orEmpty()
+            val notes = studentNotesInput.text?.toString().orEmpty()
+            val mobileNumber = findViewById<TextInputEditText>(R.id.studentMobileInput).text?.toString().orEmpty()
+            val registrationEmail = findViewById<TextInputEditText>(R.id.studentEmailInput).text?.toString().orEmpty()
             if (!canManageClass(currentUser, selectedClass)) {
                 Toast.makeText(this, "You can add students only in your assigned class", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
-            val created = SchoolRepository.addStudentProfile(
-                username = studentUsernameInput.text?.toString().orEmpty(),
-                password = "",
-                fullName = studentNameInput.text?.toString().orEmpty(),
-                className = selectedClass,
-                rollNumber = studentRollInput.text?.toString().orEmpty(),
-                guardianContact = studentGuardianInput.text?.toString().orEmpty(),
-                notes = studentNotesInput.text?.toString().orEmpty(),
-                approved = true,
-                mobileNumber = findViewById<TextInputEditText>(R.id.studentMobileInput).text?.toString().orEmpty()
-            )
-            if (created) {
-                        Toast.makeText(this, "Student record created. Ask the student to activate it with OTP.", Toast.LENGTH_LONG).show()
+            if (createdUsername.isBlank() || fullName.isBlank() || mobileNumber.isBlank()) {
+                Toast.makeText(this, "Enter a student ID, name, class, and registered mobile number.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            if (SchoolRepository.isUsernameUnavailable(createdUsername)) {
+                Toast.makeText(this, "That student ID is already in use.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            val firebaseUser = FirebaseAuth.getInstance().currentUser
+            if (firebaseUser == null) {
+                Toast.makeText(this, "Your administrator Firebase session expired. Sign in again before creating a student.", Toast.LENGTH_LONG).show()
+                return@setOnClickListener
+            }
+            val addStudentButton = findViewById<MaterialButton>(R.id.addStudentButton)
+            addStudentButton.isEnabled = false
+            firebaseUser.getIdToken(true)
+                .addOnSuccessListener { token ->
+                    FlaskEmailGateway.upsertStudentMasterRecord(
+                        firebaseIdToken = token.token.orEmpty(),
+                        studentId = createdUsername,
+                        fullName = fullName,
+                        rollNumber = rollNumber,
+                        guardianName = guardianContact,
+                        email = registrationEmail
+                    ) { serverResult ->
+                        runOnUiThread {
+                            addStudentButton.isEnabled = true
+                            serverResult.onSuccess {
+                                // Email remains only in Flask's private master record. It is not
+                                // copied to the app's shared profile state.
+                                val created = SchoolRepository.addStudentProfile(
+                                    username = createdUsername,
+                                    password = "",
+                                    fullName = fullName,
+                                    className = selectedClass,
+                                    rollNumber = rollNumber,
+                                    guardianContact = guardianContact,
+                                    notes = notes,
+                                    approved = true,
+                                    mobileNumber = mobileNumber
+                                )
+                                if (!created) {
+                                    Toast.makeText(this, "School record saved, but the local student profile could not be created.", Toast.LENGTH_LONG).show()
+                                    return@onSuccess
+                                }
+                                Toast.makeText(this, "Student record saved. Ask the student to activate it using email verification.", Toast.LENGTH_LONG).show()
                         studentUsernameInput.text = null
                         findViewById<TextInputEditText>(R.id.studentMobileInput).text = null
+                        findViewById<TextInputEditText>(R.id.studentEmailInput).text = null
                         studentNameInput.text = null
                         studentClassInput.setText(allowedClasses.firstOrNull().orEmpty(), false)
                         studentRollInput.text = null
@@ -186,9 +228,16 @@ class StudentManagementActivity : BaseActivity() {
                             findViewById<TextView>(R.id.studentPhotoText).text = "No student photo selected"
                             bindLists()
                         }
-            } else {
-                Toast.makeText(this, "Enter a unique ID, name, class, and registered mobile number.", Toast.LENGTH_LONG).show()
-            }
+                            }.onFailure { error ->
+                                Toast.makeText(this, error.message ?: "Unable to save the student master record.", Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+                .addOnFailureListener { error ->
+                    addStudentButton.isEnabled = true
+                    Toast.makeText(this, error.message ?: "Unable to verify administrator authorization.", Toast.LENGTH_LONG).show()
+                }
         }
 
         findViewById<MaterialButton>(R.id.addTeacherButton).setOnClickListener {
@@ -442,6 +491,7 @@ class StudentManagementActivity : BaseActivity() {
         val classInput = dropdownField("Class", classes, profile.className, container)
         val rollInput = textField("Roll number", profile.rollNumber, container)
         val guardianInput = textField("Guardian contact", profile.guardianContact, container)
+        val emailInput = textField("Registration email (optional)", profile.email.orEmpty(), container)
         val notesInput = textField("Notes", profile.notes, container, 3)
 
         usernameInput.isEnabled = false
@@ -455,17 +505,46 @@ class StudentManagementActivity : BaseActivity() {
                     Toast.makeText(this, "You can manage students only in your assigned class", Toast.LENGTH_SHORT).show()
                     return@setPositiveButton
                 }
-                val success = SchoolRepository.updateStudentProfile(
-                    originalUsername = profile.username,
-                    username = usernameInput.text?.toString().orEmpty(),
-                    fullName = nameInput.text?.toString().orEmpty(),
-                    className = selectedClass,
-                    rollNumber = rollInput.text?.toString().orEmpty(),
-                    guardianContact = guardianInput.text?.toString().orEmpty(),
-                    notes = notesInput.text?.toString().orEmpty()
-                )
-                Toast.makeText(this, if (success) "Student updated" else "Unable to update student", Toast.LENGTH_SHORT).show()
-                if (success) bindLists()
+                val firebaseUser = FirebaseAuth.getInstance().currentUser
+                if (firebaseUser == null) {
+                    Toast.makeText(this, "Your administrator Firebase session expired. Sign in again before saving.", Toast.LENGTH_LONG).show()
+                    return@setPositiveButton
+                }
+                val fullName = nameInput.text?.toString().orEmpty()
+                val rollNumber = rollInput.text?.toString().orEmpty()
+                val guardianContact = guardianInput.text?.toString().orEmpty()
+                val notes = notesInput.text?.toString().orEmpty()
+                val registrationEmail = emailInput.text?.toString().orEmpty()
+                firebaseUser.getIdToken(true).addOnSuccessListener { token ->
+                    FlaskEmailGateway.upsertStudentMasterRecord(
+                        firebaseIdToken = token.token.orEmpty(),
+                        studentId = profile.username,
+                        fullName = fullName,
+                        rollNumber = rollNumber,
+                        guardianName = guardianContact,
+                        email = registrationEmail
+                    ) { serverResult -> runOnUiThread {
+                        serverResult.onSuccess {
+                            // Keep private email only in the Flask master record.
+                            val success = SchoolRepository.updateStudentProfile(
+                                originalUsername = profile.username,
+                                username = profile.username,
+                                fullName = fullName,
+                                className = selectedClass,
+                                rollNumber = rollNumber,
+                                guardianContact = guardianContact,
+                                notes = notes,
+                                email = ""
+                            )
+                            Toast.makeText(this, if (success) "Student updated and synchronized" else "School record saved, but the local profile could not be updated", Toast.LENGTH_LONG).show()
+                            if (success) bindLists()
+                        }.onFailure { error ->
+                            Toast.makeText(this, error.message ?: "Unable to synchronize the student record.", Toast.LENGTH_LONG).show()
+                        }
+                    } }
+                }.addOnFailureListener { error ->
+                    Toast.makeText(this, error.message ?: "Unable to verify administrator authorization.", Toast.LENGTH_LONG).show()
+                }
             }
             .setNeutralButton("Delete") { _, _ ->
                 val success = if (canManageClass(currentUser, profile.className)) {

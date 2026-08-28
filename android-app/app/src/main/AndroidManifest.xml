@@ -26,6 +26,9 @@
             android:name=".ui.TimetableActivity"
             android:exported="false" />
         <activity
+            android:name=".ui.TestsActivity"
+            android:exported="false" />
+        <activity
             android:name=".ui.FacilitiesActivity"
             android:exported="false" />
         <activity

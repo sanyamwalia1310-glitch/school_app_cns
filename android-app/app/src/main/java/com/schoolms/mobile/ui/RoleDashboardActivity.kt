@@ -105,7 +105,8 @@ class RoleDashboardActivity : BaseActivity() {
                 notificationsButton.text = "School updates"
                 notificationsButton.background = getDrawable(R.drawable.bg_dashboard_button_teacher_updates)
                 shrinkRoleButton(notificationsButton)
-                timetableButton.visibility = View.GONE
+                timetableButton.visibility = View.VISIBLE
+                timetableButton.text = "Tests & assignments"
                 topAnnouncementCard.visibility = View.GONE
                 quizFeatureCard.visibility = View.GONE
             }
@@ -125,7 +126,8 @@ class RoleDashboardActivity : BaseActivity() {
                 classesButton.text = "Class timetable"
                 classesButton.setIconResource(android.R.drawable.ic_menu_today)
                 studentsButton.visibility = View.GONE
-                timetableButton.visibility = View.GONE
+                timetableButton.visibility = View.VISIBLE
+                timetableButton.text = "Tests & assignments"
                 studentOverviewSection.visibility = View.VISIBLE
                 notificationsButton.text = "School updates"
                 quizFeatureCard.visibility = if (isSeniorStudent(user.className)) View.VISIBLE else View.GONE
@@ -154,8 +156,9 @@ class RoleDashboardActivity : BaseActivity() {
         }
         studentsButton.setOnClickListener { open(StudentManagementActivity::class.java) }
         topAnnouncementCard.setOnClickListener { open(InfoListActivity::class.java, "notifications") }
-        timetableButton.visibility = if (user.role == Role.ADMIN) View.VISIBLE else View.GONE
-        timetableButton.setOnClickListener { open(TimetableActivity::class.java) }
+        timetableButton.visibility = View.VISIBLE
+        timetableButton.text = if (user.role == Role.ADMIN) "Tests & assignments" else timetableButton.text
+        timetableButton.setOnClickListener { open(TestsActivity::class.java) }
         quizFeatureCard.setOnClickListener { open(QuizActivity::class.java) }
         notificationsButton.setOnClickListener { open(InfoListActivity::class.java, "notifications") }
         animateContentEntrance(

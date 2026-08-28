@@ -24,10 +24,9 @@ import com.google.android.material.button.MaterialButton
 import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
-import com.google.firebase.ktx.Firebase
-import com.google.firebase.storage.ktx.storage
 import com.schoolms.mobile.R
 import com.schoolms.mobile.data.HomeworkItem
+import com.schoolms.mobile.data.MobileAcademicGateway
 import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
@@ -234,6 +233,24 @@ class ClassRecordsActivity : BaseActivity() {
                 input.setText("", false)
             }
         }
+
+        // Class/subject assignments are server-owned.  Refresh them so a teacher
+        // never sees an empty or stale subject picker after the Firestore split.
+        MobileAcademicGateway.staffSubjects(className) { result ->
+            runOnUiThread {
+                result.onSuccess { serverSubjects ->
+                    val merged = (subjectNames + serverSubjects.map { it.name })
+                        .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+                    if (merged == subjectNames) return@onSuccess
+                    subjectNames = merged
+                    markSubjectInput?.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, subjectNames))
+                    homeworkSubjectInput?.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, subjectNames))
+                    if (homeworkSubjectInput?.text.isNullOrBlank()) {
+                        homeworkSubjectInput?.setText(subjectNames.firstOrNull().orEmpty(), false)
+                    }
+                }
+            }
+        }
     }
 
     private fun bind() {
@@ -266,7 +283,10 @@ class ClassRecordsActivity : BaseActivity() {
             }
             MODE_HOMEWORK -> {
                 val user = SessionManager.currentUser ?: return
-                val items = SchoolRepository.homeworkItemsForClass(className, query).filter {
+                val items = SchoolRepository.homeworkFor(user).filter {
+                    it.className.equals(className, true) &&
+                        (it.title.contains(query, true) || it.subject.contains(query, true) || it.description.contains(query, true))
+                }.filter {
                     user.role != Role.TEACHER || it.teacherUsername == user.username
                 }
                 recyclerView.adapter = SimpleListAdapter(items.map {
@@ -390,8 +410,8 @@ class ClassRecordsActivity : BaseActivity() {
         val description = descriptionInput.text?.toString().orEmpty()
         val dueDate = dueDateInput.text?.toString().orEmpty()
 
-        fun finishSave(success: Boolean, created: Boolean) {
-            Toast.makeText(this, if (success) (if (created) "Homework added in $className" else "Homework updated") else "Fill all required fields", Toast.LENGTH_SHORT).show()
+        fun finishSave(success: Boolean, created: Boolean, message: String = "") {
+            Toast.makeText(this, if (success) (if (created) "Homework added in $className" else "Homework updated") else message.ifBlank { "Fill all required fields" }, Toast.LENGTH_LONG).show()
             if (!success) return
             subjectInput.setText(subjectNames.firstOrNull().orEmpty(), false)
             titleInput.text = null
@@ -407,41 +427,49 @@ class ClassRecordsActivity : BaseActivity() {
             bind()
         }
 
-        val fileNames = selectedFileNames.toList()
-        if (selectedFileUris.isNotEmpty() || selectedCameraBitmaps.isNotEmpty()) {
-            SessionManager.ensureFirebaseSession { authResult ->
+        if (editingHomeworkId != null) {
+            val names = selectedFileNames.toList().ifEmpty { editingAttachmentNames }
+            val success = SchoolRepository.updateHomework(user, editingHomeworkId!!, className, subject, title, description, dueDate, names, editingAttachmentUrls)
+            finishSave(success, false)
+            return
+        }
+
+        fun createOnServer(uploads: List<MobileAcademicGateway.Upload>) {
+            MobileAcademicGateway.createHomework(
+                className = className, subjectName = subject, title = title,
+                description = description, dueDate = dueDate,
+                attachmentMediaIds = uploads.map { it.mediaId }
+            ) { result ->
                 runOnUiThread {
-                    authResult.onFailure {
-                        Toast.makeText(this, it.message ?: "Please log in again before uploading attachment", Toast.LENGTH_SHORT).show()
-                    }.onSuccess {
-                        uploadSelectedTeacherFiles(fileNames) { downloadUrls ->
-                            val success = if (editingHomeworkId == null) {
-                                SchoolRepository.addHomework(user, className, subject, title, description, dueDate, fileNames, downloadUrls)
-                            } else {
-                                SchoolRepository.updateHomework(user, editingHomeworkId!!, className, subject, title, description, dueDate, fileNames, downloadUrls)
-                            }
-                            finishSave(success, editingHomeworkId == null)
-                        }
+                    result.onSuccess {
+                        SchoolRepository.refreshPrivateAcademicContent { }
+                        finishSave(true, true)
+                    }.onFailure { error ->
+                        finishSave(false, true, error.message ?: "Homework could not be saved on the school server.")
                     }
+                }
+            }
+        }
+
+        if (selectedFileUris.isNotEmpty() || selectedCameraBitmaps.isNotEmpty()) {
+            uploadSelectedTeacherFiles { result ->
+                result.onSuccess(::createOnServer).onFailure { error ->
+                    Toast.makeText(this, error.message ?: "Attachment upload failed", Toast.LENGTH_LONG).show()
                 }
             }
             return
         }
-
-        val success = if (editingHomeworkId == null) {
-            SchoolRepository.addHomework(user, className, subject, title, description, dueDate, fileNames, editingAttachmentUrls)
-        } else {
-            val names = fileNames.ifEmpty { editingAttachmentNames }
-            SchoolRepository.updateHomework(user, editingHomeworkId!!, className, subject, title, description, dueDate, names, editingAttachmentUrls)
-        }
-        finishSave(success, editingHomeworkId == null)
+        createOnServer(emptyList())
     }
 
-    private fun uploadSelectedTeacherFiles(fileNames: List<String>, onComplete: (List<String>) -> Unit) {
-        val uploadedUrls = mutableListOf<String>()
-        val uriFiles = selectedFileUris.toList()
-        val cameraFiles = selectedCameraBitmaps.toList()
-        val totalFiles = (uriFiles.size + cameraFiles.size).coerceAtLeast(1)
+    private fun uploadSelectedTeacherFiles(onComplete: (Result<List<MobileAcademicGateway.Upload>>) -> Unit) {
+        val files = selectedFileUris.mapIndexed { index, uri ->
+            prepareOptimizedUpload(uri, "homework_teacher") to selectedFileNames.getOrElse(index) { "homework_file_${index + 1}" }
+        } + selectedCameraBitmaps.map { (fileName, bitmap) ->
+            prepareOptimizedUpload(bitmap, "homework_teacher_camera") to fileName
+        }
+        val uploads = mutableListOf<MobileAcademicGateway.Upload>()
+        val totalFiles = files.size.coerceAtLeast(1)
         val progressDialog = UploadProgressDialog(this, "Uploading homework attachments")
         val saveButton = findViewById<MaterialButton>(R.id.addHomeworkButton)
         progressDialog.show()
@@ -450,75 +478,29 @@ class ClassRecordsActivity : BaseActivity() {
         fun failUpload(message: String) {
             progressDialog.dismiss()
             saveButton.isEnabled = true
-            Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
+            onComplete(Result.failure(IllegalStateException(message)))
         }
 
-        fun uploadCameraAt(index: Int) {
-            if (index >= cameraFiles.size) {
+        fun uploadAt(index: Int) {
+            if (index >= files.size) {
                 progressDialog.saving()
-                onComplete(uploadedUrls)
                 progressDialog.dismiss()
                 saveButton.isEnabled = true
+                onComplete(Result.success(uploads))
                 return
             }
-            val (fileName, bitmap) = cameraFiles[index]
-            val storageRef = Firebase.storage.reference.child("homework/${System.currentTimeMillis()}_${fileName.replace("\\s+".toRegex(), "_")}")
-            val optimizedUri = prepareOptimizedUpload(bitmap, "homework_teacher_camera")
-            val fileNumber = uriFiles.size + index + 1
-            val uploadTask = storageRef.putFile(optimizedUri)
-            uploadTask
-                .addOnProgressListener { snapshot ->
-                    val percent = if (snapshot.totalByteCount > 0) {
-                        ((snapshot.bytesTransferred * 100) / snapshot.totalByteCount).toInt()
-                    } else {
-                        0
-                    }
-                    progressDialog.update(fileNumber, totalFiles, percent)
+            val (fileUri, fileName) = files[index]
+            MobileAcademicGateway.uploadHomeworkAttachment(contentResolver, fileUri, fileName) { result ->
+                runOnUiThread {
+                    result.onSuccess { upload ->
+                        uploads.add(upload)
+                        progressDialog.update(index + 1, totalFiles, 100)
+                        uploadAt(index + 1)
+                    }.onFailure { error -> failUpload(error.message ?: "Attachment upload failed") }
                 }
-                .continueWithTask { task ->
-                    if (!task.isSuccessful) throw (task.exception ?: IllegalStateException("Upload failed"))
-                    storageRef.downloadUrl
-                }
-                .addOnSuccessListener {
-                    uploadedUrls.add(it.toString())
-                    uploadCameraAt(index + 1)
-                }
-                .addOnFailureListener { error ->
-                    failUpload(error.message ?: "Attachment upload failed")
-                }
-        }
-        fun uploadUriAt(index: Int) {
-            if (index >= uriFiles.size) {
-                uploadCameraAt(0)
-                return
             }
-            val safeName = fileNames.getOrElse(index) { "homework_file_$index" }.replace("\\s+".toRegex(), "_")
-            val storageRef = Firebase.storage.reference.child("homework/${System.currentTimeMillis()}_$safeName")
-            val optimizedUri = prepareOptimizedUpload(uriFiles[index], "homework_teacher")
-            val fileNumber = index + 1
-            val uploadTask = storageRef.putFile(optimizedUri)
-            uploadTask
-                .addOnProgressListener { snapshot ->
-                    val percent = if (snapshot.totalByteCount > 0) {
-                        ((snapshot.bytesTransferred * 100) / snapshot.totalByteCount).toInt()
-                    } else {
-                        0
-                    }
-                    progressDialog.update(fileNumber, totalFiles, percent)
-                }
-                .continueWithTask { task ->
-                    if (!task.isSuccessful) throw (task.exception ?: IllegalStateException("Upload failed"))
-                    storageRef.downloadUrl
-                }
-                .addOnSuccessListener {
-                    uploadedUrls.add(it.toString())
-                    uploadUriAt(index + 1)
-                }
-                .addOnFailureListener { error ->
-                    failUpload(error.message ?: "Attachment upload failed")
-                }
         }
-        uploadUriAt(0)
+        uploadAt(0)
     }
 
     private fun showHomeworkActions(item: HomeworkItem) {

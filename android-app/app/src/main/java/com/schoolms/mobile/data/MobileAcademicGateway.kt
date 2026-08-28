@@ -1,5 +1,7 @@
 package com.schoolms.mobile.data
 
+import android.content.ContentResolver
+import android.net.Uri
 import com.google.firebase.auth.FirebaseAuth
 import com.google.gson.Gson
 import com.google.gson.JsonArray
@@ -8,6 +10,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.schoolms.mobile.BuildConfig
 import java.net.URL
+import java.io.DataOutputStream
 import javax.net.ssl.HttpsURLConnection
 import kotlin.concurrent.thread
 
@@ -39,6 +42,8 @@ object MobileAcademicGateway {
     data class Mark(val subject: String, val assessment: String, val score: Int, val outOf: Int, val grade: String)
     data class Attendance(val date: String, val subject: String, val className: String, val present: Boolean)
     data class Download(val url: String, val filename: String)
+    data class Upload(val mediaId: Int, val filename: String)
+    data class StaffSubject(val name: String)
 
     fun homework(callback: (Result<List<Homework>>) -> Unit) = authenticated("/api/mobile/homework/list", callback) { payload ->
         payload.items().map { item ->
@@ -81,10 +86,98 @@ object MobileAcademicGateway {
             Download(payload.string("url"), payload.string("filename"))
         }
 
+    /** Uploads a private attachment through Flask; Cloudinary credentials never enter Android. */
+    fun uploadHomeworkAttachment(
+        resolver: ContentResolver,
+        fileUri: Uri,
+        filename: String,
+        callback: (Result<Upload>) -> Unit
+    ) {
+        withAuthentication(callback) { token, profileId ->
+            resolver.openInputStream(fileUri)?.use { input ->
+                postMultipart(
+                    path = "/api/mobile/media/upload",
+                    token = token,
+                    profileId = profileId,
+                    purpose = "homework_attachment",
+                    filename = filename,
+                    mimeType = resolver.getType(fileUri).orEmpty(),
+                    input = input
+                ).let { payload -> Upload(payload.int("media_id"), payload.string("filename")) }
+            } ?: throw ApiException("Unable to open the selected attachment.")
+        }
+    }
+
+    /** Creates homework only after Flask has authorized the selected teacher/admin profile. */
+    fun createHomework(
+        className: String,
+        subjectName: String,
+        title: String,
+        description: String,
+        dueDate: String,
+        attachmentMediaIds: List<Int>,
+        callback: (Result<Unit>) -> Unit
+    ) = authenticated("/api/mobile/homework", callback, mapOf(
+            "class_name" to className,
+            "subject_name" to subjectName,
+            "target_mode" to "class",
+            "title" to title,
+            "description" to description,
+            "due_date" to dueDate,
+            "attachment_media_ids" to attachmentMediaIds
+        )) { Unit }
+
+    fun staffSubjects(className: String, callback: (Result<List<StaffSubject>>) -> Unit) =
+        authenticated("/api/mobile/staff/subjects", callback, mapOf("class_name" to className)) { payload ->
+            payload.items().map {
+                StaffSubject(it.string("name"))
+            }.filter { it.name.isNotBlank() }
+        }
+
+    fun saveMark(
+        studentUsername: String,
+        className: String,
+        subjectName: String,
+        assessment: String,
+        score: Int,
+        outOf: Int,
+        callback: (Result<Unit>) -> Unit
+    ) = authenticated("/api/mobile/marks", callback, mapOf(
+            "student_username" to studentUsername,
+            "class_name" to className,
+            "subject_name" to subjectName,
+            "assessment" to assessment,
+            "score" to score,
+            "out_of" to outOf
+        )) { Unit }
+
+    fun saveAttendance(
+        className: String,
+        marks: Map<String, Boolean>,
+        attendanceDate: String = "",
+        callback: (Result<Int>) -> Unit
+    ) = authenticated("/api/mobile/attendance", callback, mapOf(
+        "class_name" to className,
+        "marks" to marks,
+        "attendance_date" to attendanceDate
+    )) { payload ->
+        payload.int("saved_count")
+    }
+
     private fun <T> authenticated(
         path: String,
         callback: (Result<T>) -> Unit,
+        values: Map<String, Any> = emptyMap(),
         parse: (JsonObject) -> T
+    ) {
+        withAuthentication(callback) { token, profileId ->
+            parse(post(path, values + mapOf("firebase_id_token" to token, "profile_id" to profileId)))
+        }
+    }
+
+    private fun <T> withAuthentication(
+        callback: (Result<T>) -> Unit,
+        action: (token: String, profileId: Int) -> T
     ) {
         val profileId = SessionManager.activeProfileId
             ?: return callback(Result.failure(ApiException("Select a school profile and sign in again.")))
@@ -98,9 +191,7 @@ object MobileAcademicGateway {
                     return@addOnSuccessListener
                 }
                 thread {
-                    callback(runCatching {
-                        parse(post(path, mapOf("firebase_id_token" to token, "profile_id" to profileId)))
-                    })
+                    callback(runCatching { action(token, profileId) })
                 }
             }
             .addOnFailureListener { callback(Result.failure(it)) }
@@ -124,6 +215,55 @@ object MobileAcademicGateway {
                 ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
             val payload = runCatching { JsonParser.parseString(text).asJsonObject }.getOrDefault(JsonObject())
             if (status !in 200..299) throw ApiException(payload.string("error").ifBlank { "Server error (HTTP $status)." }, status)
+            return payload
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    private fun postMultipart(
+        path: String,
+        token: String,
+        profileId: Int,
+        purpose: String,
+        filename: String,
+        mimeType: String,
+        input: java.io.InputStream
+    ): JsonObject {
+        val root = BuildConfig.FLASK_BASE_URL.trim().trimEnd('/')
+        if (!root.startsWith("https://")) throw ApiException("Set SCHOOLMS_FLASK_BASE_URL to the HTTPS school server.")
+        val boundary = "SchoolMsBoundary${System.currentTimeMillis()}"
+        val connection = (URL(root + path).openConnection() as? HttpsURLConnection)
+            ?: throw ApiException("The school server must use HTTPS.")
+        try {
+            connection.requestMethod = "POST"
+            connection.connectTimeout = CONNECT_TIMEOUT_MS
+            connection.readTimeout = READ_TIMEOUT_MS * 3
+            connection.doOutput = true
+            connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            connection.setRequestProperty("Accept", "application/json")
+            DataOutputStream(connection.outputStream).use { output ->
+                fun field(name: String, value: String) {
+                    output.writeBytes("--$boundary\r\n")
+                    output.writeBytes("Content-Disposition: form-data; name=\"$name\"\r\n\r\n")
+                    output.write(value.toByteArray(Charsets.UTF_8))
+                    output.writeBytes("\r\n")
+                }
+                field("firebase_id_token", token)
+                field("profile_id", profileId.toString())
+                field("purpose", purpose)
+                output.writeBytes("--$boundary\r\n")
+                output.writeBytes("Content-Disposition: form-data; name=\"file\"; filename=\"${filename.replace("\"", "_")}\"\r\n")
+                output.writeBytes("Content-Type: ${mimeType.ifBlank { "application/octet-stream" }}\r\n\r\n")
+                input.copyTo(output)
+                output.writeBytes("\r\n--$boundary--\r\n")
+                output.flush()
+            }
+            val status = connection.responseCode
+            val text = (if (status in 200..299) connection.inputStream else connection.errorStream)
+                ?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            val payload = runCatching { JsonParser.parseString(text).asJsonObject }.getOrDefault(JsonObject())
+            if (status !in 200..299) throw ApiException(payload.string("error").ifBlank { "Upload failed (HTTP $status)." }, status)
             return payload
         } finally {
             connection.disconnect()

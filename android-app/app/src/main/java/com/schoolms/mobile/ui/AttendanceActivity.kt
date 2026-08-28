@@ -17,6 +17,7 @@ import com.google.android.material.textfield.MaterialAutoCompleteTextView
 import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.schoolms.mobile.R
+import com.schoolms.mobile.data.MobileAcademicGateway
 import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
@@ -260,11 +261,7 @@ class AttendanceActivity : BaseActivity() {
             val edited = currentEntries
                 .filter { !it.locked }
                 .associate { entry -> entry.username to (marksMap[entry.username] ?: entry.present) }
-            val savedCount = SchoolRepository.updateDailyAttendanceBatch(user, selectedClass, activeEditDate, edited)
-            Toast.makeText(this, if (savedCount > 0) "$savedCount attendance records updated" else "No attendance changes found", Toast.LENGTH_SHORT).show()
-            editDate = null
-            marksMap.clear()
-            refreshAttendanceEntries()
+            saveAttendanceOnServer(edited, activeEditDate, "attendance records updated")
             return
         }
         val pending = currentEntries.filter { !it.alreadyMarked }.associate { entry ->
@@ -274,13 +271,31 @@ class AttendanceActivity : BaseActivity() {
             Toast.makeText(this, "All students are already marked", Toast.LENGTH_SHORT).show()
             return
         }
-        val savedCount = SchoolRepository.markDailyAttendanceBatch(user, selectedClass, pending)
-        val message = when {
-            savedCount > 0 -> "$savedCount attendance records saved"
-            else -> "No new attendance was saved"
+        saveAttendanceOnServer(pending, "", "attendance records saved")
+    }
+
+    private fun saveAttendanceOnServer(marks: Map<String, Boolean>, attendanceDate: String, successSuffix: String) {
+        saveButton.isEnabled = false
+        MobileAcademicGateway.saveAttendance(selectedClass, marks, attendanceDate) { result ->
+            runOnUiThread {
+                saveButton.isEnabled = true
+                result.onSuccess { savedCount ->
+                    SchoolRepository.cacheServerAttendanceBatch(
+                        selectedClass,
+                        marks,
+                        attendanceDate.ifBlank { java.time.LocalDate.now().toString() }
+                    )
+                    Toast.makeText(this, "$savedCount $successSuffix", Toast.LENGTH_SHORT).show()
+                    editDate = null
+                    marksMap.clear()
+                    SchoolRepository.refreshPrivateAcademicContent { }
+                    refreshAttendanceEntries()
+                }.onFailure { error ->
+                    Toast.makeText(this, error.message ?: "Attendance could not be saved on the school server.", Toast.LENGTH_LONG).show()
+                    refreshAttendanceEntries()
+                }
+            }
         }
-        Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-        refreshAttendanceEntries()
     }
 
     private fun showEditAttendanceDatePicker() {

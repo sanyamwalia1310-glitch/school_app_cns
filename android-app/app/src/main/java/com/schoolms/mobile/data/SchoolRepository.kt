@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.os.Handler
 import android.os.Looper
+import android.util.Patterns
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.SetOptions
@@ -2509,11 +2510,13 @@ object SchoolRepository {
         }
     }
 
-    fun addStudentProfile(username: String, password: String = "", fullName: String, className: String, rollNumber: String, guardianContact: String, notes: String, approved: Boolean = true, mobileNumber: String = ""): Boolean {
+    fun addStudentProfile(username: String, password: String = "", fullName: String, className: String, rollNumber: String, guardianContact: String, notes: String, approved: Boolean = true, mobileNumber: String = "", email: String = ""): Boolean {
         if (SessionManager.currentUser?.role != Role.ADMIN || username.isBlank() || fullName.isBlank() || className.isBlank()) return false
         val normalizedUsername = username.trim().lowercase()
         val normalizedMobile = PhoneNumberSupport.normalize(mobileNumber)
+        val normalizedEmail = email.trim().lowercase()
         if (normalizedMobile.isBlank()) return false
+        if (normalizedEmail.isNotBlank() && !Patterns.EMAIL_ADDRESS.matcher(normalizedEmail).matches()) return false
         val normalizedClass = normalizeClassName(className)
         if (normalizedUsername in deletedStudentUsernames || normalizedUsername in deletedAccountUsernames) return false
         if (studentProfiles.any { it.username == normalizedUsername } || users.any { it.username == normalizedUsername }) return false
@@ -2531,7 +2534,17 @@ object SchoolRepository {
                 approvedAccountUsernames.add(normalizedUsername)
                 saveApprovedAccounts()
             }
-            studentProfiles.add(StudentProfile(normalizedUsername, fullName.trim(), normalizedClass, rollNumber.trim(), guardianContact.trim(), notes.trim()))
+            studentProfiles.add(
+                StudentProfile(
+                    username = normalizedUsername,
+                    fullName = fullName.trim(),
+                    className = normalizedClass,
+                    rollNumber = rollNumber.trim(),
+                    guardianContact = guardianContact.trim(),
+                    notes = notes.trim(),
+                    email = normalizedEmail
+                )
+            )
             if (users.none { it.username == normalizedUsername }) {
                 users.add(
                     User(
@@ -2574,25 +2587,29 @@ object SchoolRepository {
         rollNumber: String,
         guardianContact: String,
         notes: String,
-        imageUrl: String? = null
+        imageUrl: String? = null,
+        email: String? = null
     ): Boolean {
         if (originalUsername.isBlank() || username.isBlank() || fullName.isBlank() || className.isBlank()) return false
         val original = originalUsername.trim().lowercase()
         val normalizedUsername = username.trim().lowercase()
         val normalizedClass = normalizeClassName(className)
+        val normalizedEmail = email?.trim()?.lowercase()
         val profileIndex = studentProfiles.indexOfFirst { it.username == original }
         if (profileIndex < 0) return false
         if (normalizedUsername != original && users.any { it.username == normalizedUsername }) return false
+        if (!normalizedEmail.isNullOrBlank() && !Patterns.EMAIL_ADDRESS.matcher(normalizedEmail).matches()) return false
 
         // replace profile with normalized values
-        studentProfiles[profileIndex] = StudentProfile(
-            normalizedUsername,
-            fullName.trim(),
-            normalizedClass,
-            rollNumber.trim(),
-            guardianContact.trim(),
-            notes.trim(),
-            imageUrl?.trim()?.takeIf { it.isNotBlank() } ?: studentProfiles[profileIndex].imageUrl
+        studentProfiles[profileIndex] = studentProfiles[profileIndex].copy(
+            username = normalizedUsername,
+            fullName = fullName.trim(),
+            className = normalizedClass,
+            rollNumber = rollNumber.trim(),
+            guardianContact = guardianContact.trim(),
+            notes = notes.trim(),
+            imageUrl = imageUrl?.trim()?.takeIf { it.isNotBlank() } ?: studentProfiles[profileIndex].imageUrl,
+            email = normalizedEmail ?: studentProfiles[profileIndex].email.orEmpty()
         )
 
         users.replaceAll {
@@ -3005,6 +3022,34 @@ object SchoolRepository {
             save(KEY_DAILY_ATTENDANCE, dailyAttendanceMarks)
         }
         return pendingMarks.size
+    }
+
+    /**
+     * Mirrors a successful Flask attendance write in this device's private cache.
+     * This deliberately does not use the old shared Firestore write path: attendance
+     * remains profile-private and the Render API is the source of truth.
+     */
+    fun cacheServerAttendanceBatch(className: String, marks: Map<String, Boolean>, date: String = todayStamp()) {
+        val normalizedClass = normalizeClassName(className)
+        val normalizedMarks = marks.mapKeys { it.key.trim().lowercase() }.filterKeys { it.isNotBlank() }
+        if (normalizedClass.isBlank() || normalizedMarks.isEmpty()) return
+        normalizedMarks.forEach { (username, present) ->
+            dailyAttendanceMarks.removeAll {
+                it.studentUsername == username && it.className == normalizedClass && it.date == date
+            }
+            dailyAttendanceMarks.add(
+                DailyAttendanceMark(
+                    studentUsername = username,
+                    className = normalizedClass,
+                    date = date,
+                    present = present,
+                    markedBy = "server",
+                    updatedAt = System.currentTimeMillis()
+                )
+            )
+        }
+        persistValue(KEY_DAILY_ATTENDANCE, dailyAttendanceMarks)
+        notifyDataChanged()
     }
 
     fun wasAttendanceMarkedToday(studentUsername: String, className: String): Boolean {
@@ -4300,7 +4345,8 @@ object SchoolRepository {
                         className = normalizedClass,
                         rollNumber = rollNumber,
                         guardianContact = guardianContact,
-                        notes = notes
+                        notes = notes,
+                        email = existingProfile?.email.orEmpty()
                     )
                     if (existingProfileIndex >= 0) {
                         studentProfiles[existingProfileIndex] = mergedProfile

@@ -35,3 +35,27 @@ def sync_public_gallery(db) -> None:
         },
         merge=True,
     )
+
+
+def sync_public_announcements(db) -> None:
+    """Publish only school-wide announcements for the live Android public feed."""
+    rows = db.execute(
+        """SELECT id, title, content, created_at
+        FROM announcements WHERE audience = 'all'
+        ORDER BY created_at DESC, id DESC"""
+    ).fetchall()
+    announcements = [
+        {"id": row["id"], "title": row["title"], "subtitle": row["content"], "badge": "New"}
+        for row in rows
+    ]
+    _firebase_auth()
+    from firebase_admin import firestore
+
+    firestore.client().collection("public_content").document("schoolhub").set(
+        {
+            "schemaVersion": 1,
+            "updatedAt": int(time.time() * 1000),
+            "announcements": json.dumps(announcements),
+        },
+        merge=True,
+    )

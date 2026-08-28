@@ -43,7 +43,7 @@ from .firebase_auth import (
     verify_pending_email,
 )
 from .firebase_notifications import send_profile_notification, send_public_notification
-from .public_content_sync import sync_public_gallery
+from .public_content_sync import sync_public_announcements, sync_public_gallery
 from .twofactor_otp import (
     TwoFactorOtpError,
     normalize_indian_phone,
@@ -528,6 +528,48 @@ def student_in_class(db, student_id, class_id):
         (class_id, student_id),
     ).fetchone()
     return row is not None
+
+
+def mobile_class_by_name(db, class_name):
+    """Resolve Android's display name (for example, ``Grade 8 - A``) safely."""
+    value = str(class_name or "").strip()
+    if not value:
+        raise ValueError("Choose a class.")
+    normalized = " ".join(value.lower().replace("class ", "").split())
+    matches = []
+    for row in db.execute("SELECT id, name, section FROM classes ORDER BY id").fetchall():
+        name = " ".join(str(row["name"] or "").lower().replace("class ", "").split())
+        section = " ".join(str(row["section"] or "").lower().split())
+        if normalized in {name, f"{name} - {section}".strip(" -")}:
+            matches.append(row)
+    if len(matches) != 1:
+        raise ValueError("The selected class is not configured on the school server.")
+    return matches[0]
+
+
+def mobile_subject_for_class(db, class_id, subject_name=""):
+    """Resolve a subject from the server-owned class/subject assignment."""
+    value = str(subject_name or "").strip()
+    query = """SELECT s.id, s.name FROM class_subjects cs
+        JOIN subjects s ON s.id = cs.subject_id WHERE cs.class_id = ?"""
+    params = [class_id]
+    if value:
+        query += " AND LOWER(s.name) = LOWER(?)"
+        params.append(value)
+    query += " ORDER BY s.name LIMIT 1"
+    row = db.execute(query, tuple(params)).fetchone()
+    if not row:
+        if value:
+            raise ValueError("This subject is not assigned to the selected class.")
+        raise ValueError("No subject is assigned to this class. Ask an administrator to configure class subjects.")
+    return row
+
+
+def require_mobile_staff_class_access(db, actor, class_id):
+    if actor["role"] not in {"admin", "teacher"}:
+        raise FirebaseAuthProvisioningError("Only an administrator or teacher may change academic records.")
+    if actor["role"] == "teacher" and not teacher_has_class_access(db, actor["id"], class_id):
+        raise FirebaseAuthProvisioningError("Teachers may only manage their assigned classes.")
 
 
 def student_can_access_homework(db, student_id, homework_id):
@@ -1112,7 +1154,11 @@ def create_mobile_homework():
         db = get_db()
         target_students, attachment_ids = _content_payload(payload)
         class_id = int(payload.get("class_id") or 0) or None
+        if not class_id:
+            class_id = mobile_class_by_name(db, payload.get("class_name"))["id"]
         subject_id = int(payload.get("subject_id") or 0)
+        if not subject_id:
+            subject_id = mobile_subject_for_class(db, class_id, payload.get("subject_name"))["id"]
         target_mode = str(payload.get("target_mode", "class")).strip().lower()
         title = str(payload.get("title", "")).strip()
         description = str(payload.get("description", "")).strip()
@@ -1155,6 +1201,118 @@ def create_mobile_homework():
         return jsonify(id=homework_id, message="Homework created."), 201
     except (ValueError, FirebaseAuthProvisioningError) as error:
         return jsonify(error=str(error)), 403
+
+
+@main.route("/api/mobile/staff/subjects", methods=["POST"])
+def mobile_staff_subjects():
+    """Return server-authoritative subjects for a teacher/admin class."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        school_class = mobile_class_by_name(db, payload.get("class_name"))
+        require_mobile_staff_class_access(db, actor, school_class["id"])
+        rows = db.execute(
+            """SELECT s.id, s.name FROM class_subjects cs JOIN subjects s ON s.id = cs.subject_id
+            WHERE cs.class_id = ? ORDER BY s.name""",
+            (school_class["id"],),
+        ).fetchall()
+        return jsonify(items=[dict(row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
+@main.route("/api/mobile/marks", methods=["POST"])
+def save_mobile_marks():
+    """Save marks server-side and notify only the affected student profile."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        school_class = mobile_class_by_name(db, payload.get("class_name"))
+        require_mobile_staff_class_access(db, actor, school_class["id"])
+        subject = mobile_subject_for_class(db, school_class["id"], payload.get("subject_name"))
+        username = str(payload.get("student_username", "")).strip()
+        student = db.execute(
+            """SELECT u.id FROM users u JOIN enrollments e ON e.student_id = u.id
+            WHERE LOWER(u.username) = LOWER(?) AND u.role = 'student' AND e.class_id = ?""",
+            (username, school_class["id"]),
+        ).fetchone()
+        assessment = str(payload.get("assessment", "")).strip()
+        score, total = int(payload.get("score")), int(payload.get("out_of"))
+        if not student or not assessment or total <= 0 or score < 0 or score > total:
+            raise ValueError("Enter a valid enrolled student, assessment, and marks.")
+        grade = grade_from_score(score, total)
+        existing = db.execute(
+            """SELECT id FROM marks WHERE student_id = ? AND class_id = ? AND subject_id = ? AND exam_name = ?
+            ORDER BY id DESC LIMIT 1""",
+            (student["id"], school_class["id"], subject["id"], assessment),
+        ).fetchone()
+        if existing:
+            db.execute(
+                "UPDATE marks SET total_marks = ?, obtained_marks = ?, grade = ?, entered_by = ? WHERE id = ?",
+                (total, score, grade, actor["id"], existing["id"]),
+            )
+            mark_id = existing["id"]
+        else:
+            cursor = db.execute(
+                """INSERT INTO marks (student_id, class_id, subject_id, exam_name, total_marks, obtained_marks, grade, entered_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+                (student["id"], school_class["id"], subject["id"], assessment, total, score, grade, actor["id"]),
+            )
+            mark_id = cursor.fetchone()["id"]
+        db.commit()
+        notify_student_profiles(
+            db, [student["id"]], title="New marks published", body="New marks have been published.",
+            event_type="marks", destination="marks", content_id=mark_id,
+        )
+        return jsonify(id=mark_id, grade=grade, message="Marks saved.")
+    except (TypeError, ValueError, FirebaseAuthProvisioningError) as error:
+        get_db().rollback()
+        return jsonify(error=str(error) or "Enter valid marks."), 403
+
+
+@main.route("/api/mobile/attendance", methods=["POST"])
+def save_mobile_attendance():
+    """Save a class attendance batch in the private server database."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        school_class = mobile_class_by_name(db, payload.get("class_name"))
+        require_mobile_staff_class_access(db, actor, school_class["id"])
+        subject = mobile_subject_for_class(db, school_class["id"], payload.get("subject_name"))
+        attendance_date = str(payload.get("attendance_date") or date.today().isoformat()).strip()
+        date.fromisoformat(attendance_date)
+        requested_marks = payload.get("marks")
+        if not isinstance(requested_marks, dict) or not requested_marks:
+            raise ValueError("Choose at least one student attendance record.")
+        enrolled = {
+            row["username"]: row["id"]
+            for row in db.execute(
+                """SELECT u.id, LOWER(u.username) AS username FROM users u JOIN enrollments e ON e.student_id = u.id
+                WHERE e.class_id = ? AND u.role = 'student'""", (school_class["id"],)
+            ).fetchall()
+        }
+        rows = []
+        for raw_username, present in requested_marks.items():
+            username = str(raw_username).strip().lower()
+            if username not in enrolled or not isinstance(present, bool):
+                raise ValueError("Attendance may be saved only for enrolled students.")
+            rows.append((enrolled[username], school_class["id"], subject["id"], attendance_date,
+                         "present" if present else "absent", actor["id"]))
+        db.executemany(
+            """INSERT INTO attendance (student_id, class_id, subject_id, attendance_date, status, marked_by)
+            VALUES (?, ?, ?, ?, ?, ?)
+            ON CONFLICT(student_id, class_id, subject_id, attendance_date) DO UPDATE SET
+                status = excluded.status, marked_by = excluded.marked_by""",
+            rows,
+        )
+        db.commit()
+        return jsonify(saved_count=len(rows), message="Attendance saved.")
+    except (TypeError, ValueError, FirebaseAuthProvisioningError) as error:
+        get_db().rollback()
+        return jsonify(error=str(error) or "Attendance could not be saved."), 403
 
 
 @main.route("/api/mobile/tests", methods=["POST"])
@@ -2257,9 +2415,13 @@ def announcements():
         db.commit()
         if request.form["audience"] == "all":
             try:
+                sync_public_announcements(db)
+            except Exception:
+                current_app.logger.exception("Announcement saved but Firestore public sync failed")
+            try:
                 send_public_notification(
-                    title="New school announcement",
-                    body="A new school-wide announcement has been published.",
+                    title=f"New announcement: {request.form['title'].strip()}",
+                    body="Open SchoolMS to read the latest school announcement.",
                     data={"event_type": "announcement", "destination": "announcements"},
                 )
             except FirebaseAuthProvisioningError:

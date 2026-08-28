@@ -17,6 +17,7 @@ import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textfield.TextInputLayout
 import com.schoolms.mobile.R
 import com.schoolms.mobile.data.MarkItem
+import com.schoolms.mobile.data.MobileAcademicGateway
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
 import com.schoolms.mobile.data.SimpleListItem
@@ -42,6 +43,7 @@ class GradeEntryActivity : BaseActivity() {
     private var statusView: TextView? = null
     private var submitButton: MaterialButton? = null
     private var currentHistoryMarks: List<MarkItem> = emptyList()
+    private val serverSavedMarks = mutableListOf<MarkItem>()
 
     private val assessmentOptions = listOf("Term 1", "Term 2", "Term 3", "Custom")
 
@@ -151,7 +153,20 @@ class GradeEntryActivity : BaseActivity() {
     }
 
     private fun refreshSubjects(className: String) {
-        val subjects = SchoolRepository.subjectsForClass(className).map { it.name }.distinct()
+        applySubjects(SchoolRepository.subjectsForClass(className).map { it.name })
+        MobileAcademicGateway.staffSubjects(className) { result ->
+            runOnUiThread {
+                result.onSuccess { serverSubjects ->
+                    applySubjects(serverSubjects.map { it.name })
+                }.onFailure { error ->
+                    statusView?.text = "Subjects could not be refreshed: ${error.message ?: "server unavailable"}"
+                }
+            }
+        }
+    }
+
+    private fun applySubjects(names: List<String>) {
+        val subjects = names.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
         subjectAdapter.clear()
         subjectAdapter.addAll(subjects)
         subjectAdapter.notifyDataSetChanged()
@@ -201,7 +216,7 @@ class GradeEntryActivity : BaseActivity() {
         currentHistoryMarks = if (subject.isBlank()) {
             emptyList()
         } else {
-            SchoolRepository.marksForStudent(profile.username)
+            (SchoolRepository.marksForStudent(profile.username) + serverSavedMarks)
                 .filter { it.subject.equals(subject, true) }
                 .asReversed()
         }
@@ -285,7 +300,6 @@ class GradeEntryActivity : BaseActivity() {
     }
 
     private fun submitGrade() {
-        val user = SessionManager.currentUser ?: return
         val profile = currentProfile ?: return
         val subject = currentSubject.trim()
         val assessment = selectedAssessment()
@@ -305,27 +319,29 @@ class GradeEntryActivity : BaseActivity() {
             return
         }
 
-        SessionManager.ensureFirebaseSession { authResult ->
+        submitButton?.isEnabled = false
+        MobileAcademicGateway.saveMark(
+            studentUsername = profile.username,
+            className = profile.className,
+            subjectName = subject,
+            assessment = assessment,
+            score = obtained,
+            outOf = total
+        ) { result ->
             runOnUiThread {
-                authResult.onFailure {
-                    Toast.makeText(this, it.message ?: "Please log in again before updating marks", Toast.LENGTH_SHORT).show()
-                }.onSuccess {
-                    val success = SchoolRepository.addMark(
-                        user = user,
-                        studentUsername = profile.username,
-                        studentName = profile.fullName,
-                        subject = subject,
-                        score = obtained,
-                        outOf = total,
-                        assessment = assessment
-                    )
-                    if (success) {
-                        Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
-                        bindHistory()
-                        bindAssessmentState()
-                    } else {
-                        Toast.makeText(this, "Unable to save grades", Toast.LENGTH_SHORT).show()
+                submitButton?.isEnabled = true
+                result.onSuccess {
+                    serverSavedMarks.removeAll {
+                        it.studentUsername.equals(profile.username, true) &&
+                            it.subject.equals(subject, true) && it.assessment.equals(assessment, true)
                     }
+                    serverSavedMarks.add(MarkItem(profile.username, profile.fullName, subject, obtained, total, assessment))
+                    SchoolRepository.refreshPrivateAcademicContent { }
+                    Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
+                    bindHistory()
+                    bindAssessmentState()
+                }.onFailure { error ->
+                    Toast.makeText(this, error.message ?: "Marks could not be saved on the school server.", Toast.LENGTH_LONG).show()
                 }
             }
         }
@@ -341,7 +357,7 @@ class GradeEntryActivity : BaseActivity() {
     }
 
     private fun latestSubjectMark(username: String, subject: String) =
-        SchoolRepository.marksForStudent(username)
+        (SchoolRepository.marksForStudent(username) + serverSavedMarks)
             .lastOrNull { it.subject.equals(subject, true) }
 
     companion object {

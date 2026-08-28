@@ -53,6 +53,7 @@ class DatabaseStartupTests(unittest.TestCase):
                 {
                     "FLASK_DATABASE": str(db_path),
                     "FLASK_UPLOAD_FOLDER": str(uploads_path),
+                    "DATABASE_URL": "",
                 },
                 clear=False,
             ):

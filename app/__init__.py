@@ -13,6 +13,9 @@ def create_app():
     app.config.from_mapping(
         SECRET_KEY=os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me"),
         DATABASE=str(Path(app.instance_path) / "school.db"),
+        # Render/Supabase provides this server-side value.  With no value, the
+        # existing local SQLite database remains the development datastore.
+        DATABASE_URL=os.getenv("DATABASE_URL", "").strip(),
         UPLOAD_FOLDER=str(Path(app.instance_path) / "uploads"),
         MAX_CONTENT_LENGTH=16 * 1024 * 1024,
         # Deliberately read the provider key directly from the server environment.

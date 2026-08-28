@@ -6,14 +6,17 @@ import click
 from flask import abort, current_app, g, redirect, session, url_for
 from werkzeug.security import generate_password_hash
 
+from .db_adapter import connect, is_postgres_url
+from .postgres_migration import import_sqlite_backup_once, migrate_postgres
 from .twofactor_otp import normalize_indian_phone
 
 
 def get_db():
     if "db" not in g:
-        g.db = sqlite3.connect(current_app.config["DATABASE"])
-        g.db.row_factory = sqlite3.Row
-        g.db.execute("PRAGMA foreign_keys = ON")
+        g.db = connect(
+            current_app.config["DATABASE"],
+            current_app.config.get("DATABASE_URL", ""),
+        )
     return g.db
 
 
@@ -42,6 +45,8 @@ def role_required(*roles):
 
 
 def init_db():
+    if is_postgres_url(current_app.config.get("DATABASE_URL")):
+        raise RuntimeError("init-db is SQLite development-only. PostgreSQL uses the non-destructive migrate-db command.")
     db_path = current_app.config["DATABASE"]
     upload_dir = current_app.config["UPLOAD_FOLDER"]
     Path(upload_dir).mkdir(parents=True, exist_ok=True)
@@ -555,6 +560,10 @@ def migrate_db():
     initialise; an existing database with an unexpected partial schema is not
     reset, so no existing school data can be silently overwritten.
     """
+    if is_postgres_url(current_app.config.get("DATABASE_URL")):
+        migrate_postgres(get_db())
+        return
+
     db_path = current_app.config["DATABASE"]
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = None
@@ -933,6 +942,25 @@ def migrate_db_command():
     click.echo("Applied non-destructive database migrations.")
 
 
+@click.command("import-sqlite-backup")
+@click.option("--source", "source_path", type=click.Path(exists=True, dir_okay=False, path_type=Path), required=True)
+def import_sqlite_backup_command(source_path: Path):
+    """Import a read-only SQLite backup once into configured PostgreSQL."""
+    if not is_postgres_url(current_app.config.get("DATABASE_URL")):
+        raise click.UsageError("DATABASE_URL must point to PostgreSQL before importing a SQLite backup.")
+    migrate_postgres(get_db())
+    result = import_sqlite_backup_once(get_db(), source_path)
+    mismatches = {
+        table: (result["sqlite"].get(table, 0), result["postgres"].get(table, 0))
+        for table in result["sqlite"]
+        if result["sqlite"].get(table, 0) != result["postgres"].get(table, 0)
+    }
+    if mismatches:
+        raise click.ClickException(f"Row-count verification failed for: {', '.join(sorted(mismatches))}")
+    click.echo("SQLite backup imported once and all application-table row counts match.")
+
+
 def register_db_commands(app):
     app.cli.add_command(init_db_command)
     app.cli.add_command(migrate_db_command)
+    app.cli.add_command(import_sqlite_backup_command)

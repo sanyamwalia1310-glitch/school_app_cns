@@ -31,6 +31,7 @@ from .cloudinary_media import (
     upload_public,
 )
 from .database import close_db, get_db, role_required
+from .db_adapter import integrity_errors
 from .firebase_auth import (
     FirebaseAuthProvisioningError,
     create_pending_email_account,
@@ -226,13 +227,13 @@ def create_email_login_from_master(db, role, master, email, firebase_uid):
     cursor = db.execute(
         """
         INSERT INTO users (username, password_hash, full_name, role, email, email_verified_at, firebase_uid, activated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id
         """,
         # firebase_uid remains NULL for shared identities because the legacy column is UNIQUE.
         # The dedicated mapping table below is the authoritative link for all new registrations.
         (master[id_column], generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role, email, time.time(), None),
     )
-    user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
     db.execute("INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)", (firebase_uid, user["id"]))
     if role == "student":
         db.execute(
@@ -255,7 +256,7 @@ def link_firebase_uid(db, user, firebase_uid):
             "UPDATE users SET firebase_uid = ? WHERE id = ? AND (firebase_uid IS NULL OR firebase_uid = ?)",
             (firebase_uid, user["id"], firebase_uid),
         )
-    except sqlite3.IntegrityError as error:
+    except integrity_errors() as error:
         raise FirebaseAuthProvisioningError(
             "This Firebase account is already linked to another school record."
         ) from error
@@ -275,7 +276,7 @@ def create_login_from_master(db, role, master, phone, password):
     cursor = db.execute(
         """
         INSERT INTO users (username, password_hash, full_name, role, phone, activated)
-        VALUES (?, ?, ?, ?, ?, 1)
+        VALUES (?, ?, ?, ?, ?, 1) RETURNING id
         """,
         (
             master[id_column],
@@ -285,7 +286,7 @@ def create_login_from_master(db, role, master, phone, password):
             phone,
         ),
     )
-    user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
     firebase_uid = provision_firebase_password(user, password, allow_create=True)
     link_firebase_uid(db, user, firebase_uid)
     if role == "student":
@@ -364,7 +365,7 @@ def complete_self_registration_otp(payload, password, confirm_password):
             (session_row["token_hash"],),
         )
         db.commit()
-    except (sqlite3.IntegrityError, FirebaseAuthProvisioningError, MobileOtpApiError) as error:
+    except (*integrity_errors(), FirebaseAuthProvisioningError, MobileOtpApiError) as error:
         db.rollback()
         message = (
             str(error)
@@ -502,14 +503,14 @@ def media_row_from_upload(db, file_storage, *, is_public, folder, created_by):
     cursor = db.execute(
         """INSERT INTO media_assets
         (public_id, secure_url, resource_type, delivery_type, file_format, original_filename, byte_size, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
         (
             uploaded.public_id, uploaded.secure_url, uploaded.resource_type,
             uploaded.delivery_type, uploaded.format, uploaded.original_filename,
             uploaded.bytes, created_by,
         ),
     )
-    return db.execute("SELECT * FROM media_assets WHERE id = ?", (cursor.lastrowid,)).fetchone()
+    return db.execute("SELECT * FROM media_assets WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
 
 
 def student_profile_class_id(db, student_user_id):
@@ -664,7 +665,7 @@ def login_page(*, admin_only=False):
             user = db.execute(
                 """
                 SELECT * FROM users
-                WHERE username = ? COLLATE NOCASE AND role = 'admin'
+                WHERE LOWER(username) = LOWER(?) AND role = 'admin'
                 LIMIT 1
                 """,
                 (identifier,),
@@ -1005,7 +1006,7 @@ def create_mobile_homework():
             """INSERT INTO homework
             (class_id, subject_id, teacher_id, title, description, due_date, section, target_mode,
              instructions, external_link, assigned_date)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
             (
                 class_id, subject_id, actor["id"], title, description, due_date,
                 str(payload.get("section", "")).strip(), target_mode,
@@ -1013,7 +1014,7 @@ def create_mobile_homework():
                 str(payload.get("assigned_date", "")).strip() or date.today().isoformat(),
             ),
         )
-        homework_id = cursor.lastrowid
+        homework_id = cursor.fetchone()["id"]
         if target_mode == "students":
             db.executemany(
                 "INSERT INTO homework_student_targets (homework_id, student_id) VALUES (?, ?)",
@@ -1058,7 +1059,7 @@ def create_mobile_test():
             """INSERT INTO scheduled_tests
             (class_id, section, subject_id, teacher_id, target_mode, title, syllabus, instructions,
              test_date, start_time, end_time, maximum_marks, external_link, result_published)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
             (
                 class_id, str(payload.get("section", "")).strip(), subject_id, actor["id"], target_mode,
                 title, str(payload.get("syllabus", "")).strip(), str(payload.get("instructions", "")).strip(),
@@ -1067,7 +1068,7 @@ def create_mobile_test():
                 1 if payload.get("result_published") else 0,
             ),
         )
-        test_id = cursor.lastrowid
+        test_id = cursor.fetchone()["id"]
         if target_mode == "students":
             db.executemany(
                 "INSERT INTO scheduled_test_student_targets (test_id, student_id) VALUES (?, ?)",
@@ -1341,7 +1342,11 @@ def complete_existing_email_migration():
         if verified_email != row["email"]:
             raise FirebaseAuthProvisioningError("The verified Firebase email does not match this migration.")
         user = db.execute("SELECT * FROM users WHERE id = ?", (g.user["id"],)).fetchone()
-        db.execute("INSERT OR REPLACE INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)", (row["firebase_uid"], user["id"]))
+        db.execute(
+            "INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?) "
+            "ON CONFLICT (firebase_uid, user_id) DO UPDATE SET user_id = EXCLUDED.user_id",
+            (row["firebase_uid"], user["id"]),
+        )
         db.execute("UPDATE users SET email = ?, email_verified_at = ? WHERE id = ?", (verified_email, time.time(), user["id"]))
         if user["role"] == "student":
             db.execute("UPDATE student_profiles SET email = ? WHERE user_id = ?", (verified_email, user["id"]))
@@ -1432,9 +1437,9 @@ def complete_email_registration():
         db.execute("DELETE FROM firebase_registration_sessions WHERE token_hash = ?", (row["token_hash"],))
         db.commit()
         return jsonify(message="Email verified successfully. Your account is ready.")
-    except (MobileOtpApiError, FirebaseAuthProvisioningError, sqlite3.IntegrityError) as error:
+    except (MobileOtpApiError, FirebaseAuthProvisioningError, *integrity_errors()) as error:
         db.rollback()
-        return jsonify(error=str(error) if not isinstance(error, sqlite3.IntegrityError) else "This email or school ID is already registered."), 400
+        return jsonify(error=str(error) if not isinstance(error, integrity_errors()) else "This email or school ID is already registered."), 400
 
 
 @main.route("/api/password-reset/request", methods=["POST"])

@@ -4,3 +4,4 @@ python-dotenv==1.1.0
 requests==2.34.2
 firebase-admin==7.5.0
 cloudinary==1.46.2
+psycopg[binary]==3.2.10

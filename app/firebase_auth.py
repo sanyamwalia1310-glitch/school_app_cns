@@ -124,7 +124,7 @@ def create_pending_email_account(email: str, password: str, display_name: str) -
     email = email.strip().lower()
     try:
         try:
-            auth.get_user_by_email(email)
+            firebase_user = auth.get_user_by_email(email)
         except auth.UserNotFoundError:
             firebase_user = auth.create_user(
                 email=email,
@@ -141,8 +141,17 @@ def create_pending_email_account(email: str, password: str, display_name: str) -
     except FirebaseAuthProvisioningError:
         raise
     except Exception as error:
+        # Keep the full traceback in Render logs for the administrator.  The client receives
+        # Firebase's error class and message so it can distinguish configuration/provider/
+        # account errors instead of misleadingly reporting a generic account-creation failure.
+        current_app.logger.exception(
+            "Firebase Admin create/get user failed (type=%s, code=%s)",
+            type(error).__name__, getattr(error, "code", None),
+        )
+        detail = str(error).strip() or type(error).__name__
+        code = getattr(error, "code", None) or type(error).__name__
         raise FirebaseAuthProvisioningError(
-            "Unable to create the Firebase account. Please try again later."
+            f"Firebase account setup failed [{code}]: {detail}"
         ) from error
 
 

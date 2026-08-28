@@ -1,6 +1,7 @@
 package com.schoolms.mobile
 
 import android.app.Application
+import android.util.Log
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.PersistentCacheSettings
 import com.google.firebase.firestore.FirebaseFirestoreSettings
@@ -12,6 +13,8 @@ import com.schoolms.mobile.data.SessionManager
 import com.schoolms.mobile.ui.NotificationHelper
 
 class SchoolApplication : Application() {
+    companion object { private const val TAG = "SchoolApplication" }
+
     override fun onCreate() {
         super.onCreate()
         SessionManager.init(this)
@@ -21,12 +24,16 @@ class SchoolApplication : Application() {
                 .setLocalCacheSettings(PersistentCacheSettings.newBuilder().build())
                 .build()
             true
+        }.onFailure { error ->
+            Log.e(TAG, "Firebase initialization failed: ${error.message}", error)
         }.getOrDefault(false)
 
         if (firebaseReady) {
             runCatching {
                 MessagingTopics.init(this)
                 MessagingTopics.subscribeBaseTopics()
+            }.onFailure { error ->
+                Log.e(TAG, "Firebase Messaging initialization failed: ${error.message}", error)
             }
         }
         NotificationHelper.ensureChannel(this)

@@ -2,6 +2,7 @@ package com.schoolms.mobile.ui
 
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import android.widget.ArrayAdapter
 import android.widget.TextView
@@ -17,6 +18,7 @@ import com.schoolms.mobile.data.Role
 
 /** First registration uses Flask master-record checks and Firebase's normal verification email. */
 class RegistrationActivity : BaseActivity() {
+    companion object { private const val TAG = "RegistrationActivity" }
     private lateinit var role: MaterialAutoCompleteTextView; private lateinit var identifier: TextInputEditText
     private lateinit var email: TextInputEditText; private lateinit var password: TextInputEditText; private lateinit var confirm: TextInputEditText
     private lateinit var status: TextView; private lateinit var start: MaterialButton; private lateinit var resend: MaterialButton; private lateinit var complete: MaterialButton
@@ -27,6 +29,12 @@ class RegistrationActivity : BaseActivity() {
         start.setOnClickListener { startRegistration() }; resend.setOnClickListener { resendEmail() }; complete.setOnClickListener { completeRegistration() }
     }
     private fun selectedRole() = Role.fromLabel(role.text?.toString().orEmpty()).name.lowercase()
+    private fun failureText(error: Throwable?, fallback: String): String {
+        Log.e(TAG, "$fallback: ${error?.message}", error)
+        val code = (error as? com.google.firebase.auth.FirebaseAuthException)?.errorCode
+        val detail = error?.localizedMessage?.takeIf { it.isNotBlank() } ?: fallback
+        return if (code.isNullOrBlank()) detail else "$code: $detail"
+    }
     private fun startRegistration() { val id=identifier.text?.toString().orEmpty().trim(); registeredEmail=email.text?.toString().orEmpty().trim(); registeredPassword=password.text?.toString().orEmpty(); val c=confirm.text?.toString().orEmpty()
         if(id.isBlank()||registeredEmail.isBlank()||registeredPassword.length<8||registeredPassword!=c){ Toast.makeText(this,"Enter a school ID, real email, and matching 8-character password.",Toast.LENGTH_LONG).show(); return }
         start.isEnabled=false; status.text="Checking your school record..."
@@ -54,12 +62,12 @@ class RegistrationActivity : BaseActivity() {
                                         complete.visibility = View.VISIBLE
                                     }
                                     ?.addOnFailureListener { error ->
-                                        status.text = error.message ?: "Firebase could not send the verification email."
+                                        status.text = failureText(error, "Firebase could not send the verification email.")
                                     }
                                     ?: run { status.text = "Firebase could not start the verification email." }
                             }
                             .addOnFailureListener { error ->
-                                status.text = error.message ?: "Unable to send verification email."
+                                status.text = failureText(error, "Unable to sign in to Firebase after the school record check.")
                             }
                     } else {
                         status.text = "This verified email already owns another school profile. Tap Continue to link this profile."
@@ -71,7 +79,7 @@ class RegistrationActivity : BaseActivity() {
                     if (apiError?.statusCode == 409) {
                         verifyExistingEmailAndRetry(id, confirmPassword)
                     } else {
-                        status.text = error.message ?: "Unable to start registration."
+                        status.text = failureText(error, "Unable to start registration.")
                     }
                 }
             }
@@ -94,12 +102,12 @@ class RegistrationActivity : BaseActivity() {
                     .addOnSuccessListener { token -> startRegistrationOnServer(id, confirmPassword, token.token.orEmpty()) }
                     .addOnFailureListener { error ->
                         start.isEnabled = true
-                        status.text = error.message ?: "Unable to verify the existing email account."
+                        status.text = failureText(error, "Unable to verify the existing email account.")
                     }
             }
             .addOnFailureListener { error ->
                 start.isEnabled = true
-                status.text = error.message ?: "This email already exists. Enter its correct Firebase password."
+                status.text = failureText(error, "This email already exists. Enter its correct Firebase password.")
             }
     }
 
@@ -114,11 +122,14 @@ class RegistrationActivity : BaseActivity() {
                             credential.user?.sendEmailVerification()
                                 ?.addOnSuccessListener { status.text = "Verification email resent." }
                                 ?.addOnFailureListener { error ->
-                                    status.text = error.message ?: "Firebase could not resend the verification email."
+                                    status.text = failureText(error, "Firebase could not resend the verification email.")
                                 }
                         }
+                        .addOnFailureListener { error ->
+                            status.text = failureText(error, "Unable to sign in to Firebase to resend the verification email.")
+                        }
                 }.onFailure { error ->
-                    status.text = error.message ?: "Unable to resend email."
+                    status.text = failureText(error, "Unable to request another verification email.")
                 }
             }
         }
@@ -144,11 +155,15 @@ class RegistrationActivity : BaseActivity() {
                             startActivity(Intent(this, LoginActivity::class.java))
                             finish()
                         }.onFailure { error ->
-                            status.text = error.message ?: "Unable to finish registration."
+                            status.text = failureText(error, "Unable to finish registration.")
                         }
                     }
                 }
+            }.addOnFailureListener { error ->
+                status.text = failureText(error, "Unable to refresh the Firebase verification token.")
             }
+        }.addOnFailureListener { error ->
+            status.text = failureText(error, "Unable to refresh Firebase email verification status.")
         }
     }
 }

@@ -5,8 +5,11 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.text.InputType
 import android.view.Gravity
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
 import android.view.View
 import android.widget.ArrayAdapter
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TableLayout
 import android.widget.TableRow
@@ -41,6 +44,7 @@ class TimetableActivity : BaseActivity() {
     private lateinit var removeTimeButton: MaterialButton
     private lateinit var viewTeachersButton: MaterialButton
     private lateinit var viewStudentsButton: MaterialButton
+    private var timetableScale = 1f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,6 +55,7 @@ class TimetableActivity : BaseActivity() {
         setupToolbar(findViewById<MaterialToolbar>(R.id.toolbar), getString(R.string.timetable_title))
 
         tableLayout = findViewById(R.id.timetableTable)
+        configurePinchZoom(findViewById(R.id.timetableHorizontalScroll))
         emptyStateText = findViewById(R.id.emptyStateText)
         adminActionsContainer = findViewById(R.id.adminActionsContainer)
         rotateTimetableButton = findViewById(R.id.rotateTimetableButton)
@@ -80,6 +85,23 @@ class TimetableActivity : BaseActivity() {
         viewStudentsButton.setOnClickListener { showStudentDirectoryByClassDialog() }
 
         renderSheet()
+    }
+
+    private fun configurePinchZoom(scrollView: HorizontalScrollView) {
+        val detector = ScaleGestureDetector(this, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(scaleDetector: ScaleGestureDetector): Boolean {
+                timetableScale = (timetableScale * scaleDetector.scaleFactor).coerceIn(0.65f, 1.65f)
+                tableLayout.pivotX = 0f
+                tableLayout.pivotY = 0f
+                tableLayout.scaleX = timetableScale
+                tableLayout.scaleY = timetableScale
+                return true
+            }
+        })
+        scrollView.setOnTouchListener { _, event: MotionEvent ->
+            detector.onTouchEvent(event)
+            false
+        }
     }
 
     override fun onResume() {
@@ -119,9 +141,9 @@ class TimetableActivity : BaseActivity() {
                 TableLayout.LayoutParams.WRAP_CONTENT
             )
         }
-        row.addView(createHeaderCell(rowLabelTitle, 132))
+        row.addView(createHeaderCell(rowLabelTitle, 156, isCorner = true))
         columnLabels.forEach { label ->
-            row.addView(createHeaderCell(label, 128))
+            row.addView(createHeaderCell(label, 156))
         }
         return row
     }
@@ -146,46 +168,46 @@ class TimetableActivity : BaseActivity() {
         return row
     }
 
-    private fun createHeaderCell(text: String, widthDp: Int): TextView {
+    private fun createHeaderCell(text: String, widthDp: Int, isCorner: Boolean = false): TextView {
         return TextView(this).apply {
-            layoutParams = TableRow.LayoutParams(dp(widthDp), dp(58)).apply {
-                marginEnd = -1
-                bottomMargin = -1
+            layoutParams = TableRow.LayoutParams(dp(widthDp), dp(60)).apply {
+                marginEnd = dp(4)
+                bottomMargin = dp(4)
             }
             gravity = Gravity.CENTER
             textAlignment = View.TEXT_ALIGNMENT_CENTER
-            setPadding(dp(8), dp(12), dp(8), dp(12))
+            setPadding(dp(10), dp(10), dp(10), dp(10))
             includeFontPadding = false
-            setTextColor(Color.parseColor("#16324F"))
-            textSize = 11.5f
+            setTextColor(Color.WHITE)
+            textSize = 13f
             maxLines = 2
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             this.text = text
             background = sheetCellDrawable(
-                fillColor = Color.parseColor("#EAF4FF"),
-                strokeColor = Color.parseColor("#8FAFD1")
+                fillColor = Color.parseColor(if (isCorner) "#0B344B" else "#0E5B7A"),
+                strokeColor = Color.parseColor("#0E5B7A")
             )
         }
     }
 
     private fun createRowLabelCell(text: String, rowIndex: Int): TextView {
         return TextView(this).apply {
-            layoutParams = TableRow.LayoutParams(dp(132), dp(84)).apply {
-                marginEnd = -1
-                bottomMargin = -1
+            layoutParams = TableRow.LayoutParams(dp(156), dp(92)).apply {
+                marginEnd = dp(4)
+                bottomMargin = dp(4)
             }
             gravity = Gravity.CENTER
             textAlignment = View.TEXT_ALIGNMENT_CENTER
-            setPadding(dp(8), dp(12), dp(8), dp(12))
+            setPadding(dp(10), dp(12), dp(10), dp(12))
             includeFontPadding = false
-            setTextColor(Color.parseColor("#16324F"))
-            textSize = 11.5f
+            setTextColor(Color.parseColor("#123E57"))
+            textSize = 12.5f
             maxLines = 2
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
+            typeface = android.graphics.Typeface.create("sans-serif", android.graphics.Typeface.BOLD)
             this.text = text
             background = sheetCellDrawable(
-                fillColor = if (rowIndex % 2 == 0) Color.parseColor("#F8FBFF") else Color.parseColor("#F3F8FD"),
-                strokeColor = Color.parseColor("#AFC3D9")
+                fillColor = if (rowIndex % 2 == 0) Color.parseColor("#E8F5FB") else Color.parseColor("#DFF0F8"),
+                strokeColor = Color.parseColor("#9CC8DA")
             )
         }
     }
@@ -200,23 +222,23 @@ class TimetableActivity : BaseActivity() {
     ): TextView {
         val editable = user.role == Role.ADMIN
         val cell = TextView(this).apply {
-            layoutParams = TableRow.LayoutParams(dp(128), dp(84)).apply {
-                marginEnd = -1
-                bottomMargin = -1
+            layoutParams = TableRow.LayoutParams(dp(156), dp(92)).apply {
+                marginEnd = dp(4)
+                bottomMargin = dp(4)
             }
             gravity = Gravity.CENTER
             textAlignment = View.TEXT_ALIGNMENT_CENTER
-            setPadding(dp(10), dp(10), dp(10), dp(10))
+            setPadding(dp(12), dp(10), dp(12), dp(10))
             includeFontPadding = false
             setLineSpacing(dp(2).toFloat(), 1.0f)
-            textSize = 11f
+            textSize = 12.5f
             maxLines = 4
-            setTextColor(Color.parseColor("#1C2430"))
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            text = buildCellText(slot)
+            setTextColor(Color.parseColor("#162D3A"))
+            typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+            text = buildCellText(slot, editable)
             background = sheetCellDrawable(
                 fillColor = premiumCellColor(slot?.subject.orEmpty(), rowIndex, colIndex),
-                strokeColor = Color.parseColor("#AFC3D9")
+                strokeColor = Color.parseColor("#9CC8DA")
             )
         }
         if (editable) {
@@ -227,8 +249,8 @@ class TimetableActivity : BaseActivity() {
         return cell
     }
 
-    private fun buildCellText(slot: TimetableSlot?): String {
-        if (slot == null) return "Edit"
+    private fun buildCellText(slot: TimetableSlot?, editable: Boolean): String {
+        if (slot == null) return if (editable) "Tap to add" else "—"
         return buildString {
             append(slot.subject.trim())
             val teacherName = displayTeacherName(slot)
@@ -542,7 +564,7 @@ class TimetableActivity : BaseActivity() {
         return GradientDrawable().apply {
             shape = GradientDrawable.RECTANGLE
             setColor(fillColor)
-            cornerRadius = 0f
+            cornerRadius = dp(10).toFloat()
             setStroke(dp(1), strokeColor)
         }
     }

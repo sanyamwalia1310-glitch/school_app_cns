@@ -20,8 +20,8 @@
         android:layout_marginStart="16dp"
         android:layout_marginTop="14dp"
         android:layout_marginEnd="16dp"
-        app:cardBackgroundColor="#F4FBFF"
-        app:cardCornerRadius="24dp"
+        app:cardBackgroundColor="#E7F5FC"
+        app:cardCornerRadius="18dp"
         app:cardElevation="4dp"
         app:strokeColor="#1F4FD1C5"
         app:strokeWidth="1dp">
@@ -35,9 +35,10 @@
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="Subjects are shown across the top. Classes run down the side."
-                android:textColor="@color/text_secondary"
-                android:textSize="13sp" />
+                android:fontFamily="sans-serif-medium"
+                android:text="Landscape view • Classes across the top • Time slots down the side"
+                android:textColor="#174B68"
+                android:textSize="14sp" />
         </LinearLayout>
     </com.google.android.material.card.MaterialCardView>
 
@@ -182,6 +183,7 @@
             android:fillViewport="true">
 
             <HorizontalScrollView
+                android:id="@+id/timetableHorizontalScroll"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:scrollbars="none">

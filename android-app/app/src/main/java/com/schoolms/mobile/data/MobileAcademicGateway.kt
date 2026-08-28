@@ -179,8 +179,6 @@ object MobileAcademicGateway {
         callback: (Result<T>) -> Unit,
         action: (token: String, profileId: Int) -> T
     ) {
-        val profileId = SessionManager.activeProfileId
-            ?: return callback(Result.failure(ApiException("Select a school profile and sign in again.")))
         val firebaseUser = FirebaseAuth.getInstance().currentUser
             ?: return callback(Result.failure(ApiException("Firebase session expired. Please sign in again.")))
         firebaseUser.getIdToken(false)
@@ -190,11 +188,40 @@ object MobileAcademicGateway {
                     callback(Result.failure(ApiException("Firebase session token is unavailable.")))
                     return@addOnSuccessListener
                 }
-                thread {
-                    callback(runCatching { action(token, profileId) })
+                val profileId = SessionManager.activeProfileId
+                if (profileId != null) {
+                    thread { callback(runCatching { action(token, profileId) }) }
+                } else {
+                    restoreSingleAuthorizedProfile(token, callback, action)
                 }
             }
             .addOnFailureListener { callback(Result.failure(it)) }
+    }
+
+    /**
+     * A cached legacy login can lose its in-memory profile ID after an app update.
+     * Restore it only when Firebase/Flask confirm there is exactly one authorized
+     * school profile.  Shared-parent accounts must still explicitly select a profile.
+     */
+    private fun <T> restoreSingleAuthorizedProfile(
+        token: String,
+        callback: (Result<T>) -> Unit,
+        action: (token: String, profileId: Int) -> T
+    ) {
+        FlaskEmailGateway.linkedProfiles(token) { profilesResult ->
+            profilesResult.onFailure { callback(Result.failure(it)) }.onSuccess { profiles ->
+                val profile = profiles.singleOrNull()
+                    ?: return@onSuccess callback(Result.failure(ApiException(
+                        "Select your school profile from the sign-in screen, then try again."
+                    )))
+                FlaskEmailGateway.selectProfile(token, profile.id) { selectedResult ->
+                    selectedResult.onFailure { callback(Result.failure(it)) }.onSuccess {
+                        SessionManager.selectAuthorizedProfile(profile.id)
+                        thread { callback(runCatching { action(token, profile.id) }) }
+                    }
+                }
+            }
+        }
     }
 
     private fun post(path: String, values: Map<String, Any>): JsonObject {

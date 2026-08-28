@@ -695,11 +695,15 @@ def validate_content_target(db, *, actor, class_id, subject_id, target_mode, tar
                 raise ValueError("Every selected student must belong to the selected class.")
 
 
-def save_content_attachment_links(db, *, owner_type, owner_id, asset_ids):
+def save_content_attachment_links(db, *, owner_type, owner_id, asset_ids, uploaded_by=None):
     for asset_id in asset_ids:
         asset = db.execute("SELECT * FROM media_assets WHERE id = ?", (asset_id,)).fetchone()
-        if not asset or asset["delivery_type"] != "authenticated":
-            raise ValueError("Select a valid private attachment uploaded through Flask.")
+        if not asset:
+            raise ValueError("The selected attachment was not found. Choose the file again and retry.")
+        if asset["delivery_type"] not in {"authenticated", "private"}:
+            raise ValueError("Homework attachments must be uploaded through the secure school upload.")
+        if uploaded_by is not None and asset["created_by"] != uploaded_by:
+            raise FirebaseAuthProvisioningError("You may attach only files uploaded from your own school account.")
         db.execute(
             """INSERT INTO content_attachments (owner_type, owner_id, media_asset_id, display_name)
             VALUES (?, ?, ?, ?)""",
@@ -1187,7 +1191,10 @@ def create_mobile_homework():
                 "INSERT INTO homework_student_targets (homework_id, student_id) VALUES (?, ?)",
                 ((homework_id, student_id) for student_id in target_students),
             )
-        save_content_attachment_links(db, owner_type="homework", owner_id=homework_id, asset_ids=attachment_ids)
+        save_content_attachment_links(
+            db, owner_type="homework", owner_id=homework_id,
+            asset_ids=attachment_ids, uploaded_by=actor["id"],
+        )
         db.commit()
         recipients = target_student_ids(
             db, target_mode=target_mode, class_id=class_id, content_id=homework_id,
@@ -1353,7 +1360,10 @@ def create_mobile_test():
                 "INSERT INTO scheduled_test_student_targets (test_id, student_id) VALUES (?, ?)",
                 ((test_id, student_id) for student_id in target_students),
             )
-        save_content_attachment_links(db, owner_type="test", owner_id=test_id, asset_ids=attachment_ids)
+        save_content_attachment_links(
+            db, owner_type="test", owner_id=test_id,
+            asset_ids=attachment_ids, uploaded_by=actor["id"],
+        )
         db.commit()
         recipients = target_student_ids(
             db, target_mode=target_mode, class_id=class_id, content_id=test_id,

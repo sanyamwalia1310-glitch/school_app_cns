@@ -1575,6 +1575,13 @@ def complete_email_registration():
 
 @main.route("/api/password-reset/request", methods=["POST"])
 def request_email_password_reset():
+    """Validate reset delivery for both activated and pending email registrations.
+
+    A student master record exists before Firebase email activation.  Its registered
+    email may therefore need a Firebase password reset even though a completed
+    ``users`` profile does not exist yet.  The exact school ID + private master
+    email must match before the client is told to ask Firebase to deliver a link.
+    """
     payload = request.get_json(silent=True) or {}
     try:
         identifier = str(payload.get("identifier", "")).strip()
@@ -1582,13 +1589,32 @@ def request_email_password_reset():
         email = normalize_email(payload.get("email"))
         if role not in EMAIL_REGISTRATION_ROLES or not identifier:
             raise MobileOtpApiError("Enter your Student ID or Teacher ID and select the correct role.")
-        user = get_db().execute(
+        db = get_db()
+        user = db.execute(
             "SELECT * FROM users WHERE username = ? AND role = ? AND email = ? AND activated = 1",
             (identifier, role, email),
         ).fetchone()
-        if not user or not user["firebase_uid"]:
-            raise MobileOtpApiError("No registered Student/Teacher account matches these details.")
-        return jsonify(message="Password reset email ready to send.", email=email)
+        if user:
+            linked_identity = (user["firebase_uid"] or "").strip() or db.execute(
+                "SELECT 1 FROM firebase_profile_links WHERE user_id = ?", (user["id"],)
+            ).fetchone()
+            if linked_identity:
+                return jsonify(message="Password reset email ready to send.", email=email, pending_activation=False)
+
+        table = "student_master_records" if role == "student" else "teacher_master_records"
+        id_column = "student_id" if role == "student" else "teacher_id"
+        master = db.execute(
+            f"SELECT * FROM {table} WHERE {id_column} = ? AND LOWER(COALESCE(email, '')) = ?",
+            (identifier, email),
+        ).fetchone()
+        if master and not _master_has_activated_login(db, master, id_column):
+            return jsonify(
+                message="Pending-account password reset email ready to send.",
+                email=email,
+                pending_activation=True,
+            )
+
+        raise MobileOtpApiError("No school account or pending activation matches these details.")
     except MobileOtpApiError as error:
         return jsonify(error=str(error)), 400
 

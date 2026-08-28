@@ -198,8 +198,52 @@ def normalize_email(value):
     return email
 
 
+def _master_has_activated_login(db, master, id_column):
+    """Return whether a master record is backed by a real activated local login.
+
+    A master record is deliberately created by an administrator *before* a student
+    activates their account.  Older interrupted registration attempts can leave an
+    inactive ``users`` row or a stale master-record flag behind.  Those artefacts
+    must not turn a pending student into an "already registered" student.
+    """
+    user_ids = []
+    if master["login_user_id"] is not None:
+        user_ids.append(master["login_user_id"])
+
+    named_user = db.execute(
+        "SELECT id, activated FROM users WHERE username = ?", (master[id_column],)
+    ).fetchone()
+    if named_user and named_user["id"] not in user_ids:
+        user_ids.append(named_user["id"])
+
+    for user_id in user_ids:
+        user = db.execute("SELECT activated FROM users WHERE id = ?", (user_id,)).fetchone()
+        if user and int(user["activated"] or 0) == 1:
+            return True
+    return False
+
+
+def _restore_pending_master_record(db, table, id_column, master):
+    """Clear only stale incomplete-registration links and return a fresh record.
+
+    This never changes an activated account.  It only repairs a legacy/incomplete
+    row where no activated login exists, so the student can finish the email
+    activation flow normally.
+    """
+    if _master_has_activated_login(db, master, id_column):
+        raise MobileOtpApiError("This Student/Teacher ID has already registered a login account.")
+
+    if master["registration_completed"] or master["login_user_id"] is not None:
+        db.execute(
+            f"UPDATE {table} SET login_user_id = NULL, registration_completed = 0 WHERE id = ?",
+            (master["id"],),
+        )
+        master = db.execute("SELECT * FROM " + table + " WHERE id = ?", (master["id"],)).fetchone()
+    return master
+
+
 def email_registration_master_record(payload):
-    """Resolve one unregistered master record for the Firebase email-registration flow."""
+    """Resolve one pending master record for the Firebase email-registration flow."""
     identifier = str(payload.get("identifier", "")).strip()
     role = str(payload.get("role", "")).strip().lower()
     if not identifier:
@@ -212,35 +256,57 @@ def email_registration_master_record(payload):
     master = db.execute(f"SELECT * FROM {table} WHERE {id_column} = ?", (identifier,)).fetchone()
     if not master:
         raise MobileOtpApiError("Student/Teacher ID not found in school records.")
-    if master["registration_completed"] or master["login_user_id"] is not None:
-        raise MobileOtpApiError("This Student/Teacher ID has already registered a login account.")
-    return role, table, id_column, master
+    return role, table, id_column, _restore_pending_master_record(db, table, id_column, master)
 
 
 def create_email_login_from_master(db, role, master, email, firebase_uid):
     """Create the local login link only after Firebase reports this email is verified."""
     table = "student_master_records" if role == "student" else "teacher_master_records"
     id_column = "student_id" if role == "student" else "teacher_id"
-    if master["registration_completed"] or master["login_user_id"] is not None:
-        raise MobileOtpApiError("This Student/Teacher ID has already registered a login account.")
-    if db.execute("SELECT 1 FROM users WHERE username = ?", (master[id_column],)).fetchone():
-        raise MobileOtpApiError("This Student/Teacher ID has already registered a login account.")
-    cursor = db.execute(
-        """
-        INSERT INTO users (username, password_hash, full_name, role, email, email_verified_at, firebase_uid, activated)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id
-        """,
-        # firebase_uid remains NULL for shared identities because the legacy column is UNIQUE.
-        # The dedicated mapping table below is the authoritative link for all new registrations.
-        (master[id_column], generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role, email, time.time(), None),
+    master = _restore_pending_master_record(db, table, id_column, master)
+    existing_user = db.execute(
+        "SELECT * FROM users WHERE username = ?", (master[id_column],)
+    ).fetchone()
+    if existing_user:
+        # Reuse only a demonstrably inactive row left by an interrupted legacy
+        # attempt.  Keeping its ID avoids breaking any non-sensitive references.
+        db.execute(
+            """UPDATE users
+            SET password_hash = ?, full_name = ?, role = ?, email = ?,
+                email_verified_at = ?, firebase_uid = NULL, activated = 1
+            WHERE id = ?""",
+            (
+                generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role,
+                email, time.time(), existing_user["id"],
+            ),
+        )
+        user = db.execute("SELECT * FROM users WHERE id = ?", (existing_user["id"],)).fetchone()
+    else:
+        cursor = db.execute(
+            """
+            INSERT INTO users (username, password_hash, full_name, role, email, email_verified_at, firebase_uid, activated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id
+            """,
+            # firebase_uid remains NULL for shared identities because the legacy column is UNIQUE.
+            # The dedicated mapping table below is the authoritative link for all new registrations.
+            (master[id_column], generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role, email, time.time(), None),
+        )
+        user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
+
+    db.execute(
+        """INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)
+        ON CONFLICT (user_id) DO UPDATE SET firebase_uid = EXCLUDED.firebase_uid""",
+        (firebase_uid, user["id"]),
     )
-    user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
-    db.execute("INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)", (firebase_uid, user["id"]))
     if role == "student":
         db.execute(
             """INSERT INTO student_profiles
             (user_id, class_id, roll_no, email, phone, address, guardian_name)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT (user_id) DO UPDATE SET
+                class_id = EXCLUDED.class_id, roll_no = EXCLUDED.roll_no,
+                email = EXCLUDED.email, phone = EXCLUDED.phone,
+                address = EXCLUDED.address, guardian_name = EXCLUDED.guardian_name""",
             (user["id"], master["class_id"], master["roll_no"], email, None, master["address"], master["guardian_name"]),
         )
     db.execute(f"UPDATE {table} SET login_user_id = ?, registration_completed = 1 WHERE id = ?", (user["id"], master["id"]))
@@ -861,8 +927,13 @@ def upsert_mobile_student_master_record():
 
         db = get_db()
         existing = db.execute("SELECT * FROM student_master_records WHERE student_id = ?", (student_id,)).fetchone()
-        if existing and (existing["registration_completed"] or existing["login_user_id"] is not None):
-            raise MobileOtpApiError("This student already has an activated account.", status_code=409)
+        if existing:
+            try:
+                existing = _restore_pending_master_record(
+                    db, "student_master_records", "student_id", existing
+                )
+            except MobileOtpApiError as error:
+                raise MobileOtpApiError("This student already has an activated account.", status_code=409) from error
         if existing:
             db.execute(
                 """UPDATE student_master_records

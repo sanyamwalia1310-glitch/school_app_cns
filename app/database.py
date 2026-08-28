@@ -547,16 +547,41 @@ def init_db():
 
 
 def migrate_db():
-    """Add verified-phone and login-protection fields without deleting user data."""
+    """Create a new database once, then apply only additive migrations.
+
+    A Render instance may start with an empty SQLite file.  The original
+    migration routine treated that as "nothing to migrate", which left the
+    application without its base tables.  A truly empty database is safe to
+    initialise; an existing database with an unexpected partial schema is not
+    reset, so no existing school data can be silently overwritten.
+    """
     db_path = current_app.config["DATABASE"]
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path)
+    conn = None
     try:
-        has_users_table = conn.execute(
-            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'users'"
-        ).fetchone()
-        if not has_users_table:
-            return
+        conn = sqlite3.connect(db_path)
+        existing_tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master "
+                "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+            )
+        }
+        if "users" not in existing_tables:
+            if existing_tables:
+                raise RuntimeError(
+                    "Refusing to initialise a non-empty SQLite database that "
+                    "does not contain the users table. Restore or migrate it "
+                    "explicitly so existing data is never overwritten."
+                )
+
+            # init_db contains the complete baseline schema.  It is used only
+            # for a database with no application tables, then this function is
+            # re-entered to apply every later non-destructive migration below.
+            conn.close()
+            conn = None
+            init_db()
+            return migrate_db()
 
         columns = {row[1] for row in conn.execute("PRAGMA table_info(users)")}
         if "phone" not in columns:
@@ -892,7 +917,8 @@ def migrate_db():
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_firebase_uid ON users(firebase_uid) WHERE firebase_uid IS NOT NULL")
         conn.commit()
     finally:
-        conn.close()
+        if conn is not None:
+            conn.close()
 
 
 @click.command("init-db")

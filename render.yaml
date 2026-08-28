@@ -3,7 +3,7 @@ services:
     name: school-management-app
     env: python
     buildCommand: "python -m pip install -r requirements.txt"
-    startCommand: "gunicorn --workers 2 --bind 0.0.0.0:$PORT wsgi:app"
+    startCommand: "python -m flask --app run.py migrate-db && exec gunicorn --workers 2 --bind 0.0.0.0:$PORT wsgi:app"
     envVars:
       - key: FLASK_SECRET_KEY
         generateValue: true

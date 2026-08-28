@@ -502,7 +502,11 @@ object SessionManager {
             }
             .addOnFailureListener { error ->
                 val message = when ((error as? FirebaseAuthException)?.errorCode) {
-                    "ERROR_INVALID_CREDENTIAL", "ERROR_WRONG_PASSWORD" -> "Incorrect password."
+                    "ERROR_INVALID_CREDENTIAL", "ERROR_WRONG_PASSWORD" -> if (username.contains("@")) {
+                        "Incorrect password."
+                    } else {
+                        "For an email-activated account, sign in with the registered email—not the Student ID. Complete activation first if needed."
+                    }
                     "ERROR_USER_NOT_FOUND" -> "No login exists for this user yet."
                     else -> error.message ?: "Sign-in failed."
                 }

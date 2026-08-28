@@ -18,14 +18,21 @@ import com.schoolms.mobile.data.Role
 
 /** First registration uses Flask master-record checks and Firebase's normal verification email. */
 class RegistrationActivity : BaseActivity() {
-    companion object { private const val TAG = "RegistrationActivity" }
+    companion object {
+        private const val TAG = "RegistrationActivity"
+        const val EXTRA_ROLE = "registration_role"
+        const val EXTRA_IDENTIFIER = "registration_identifier"
+        const val EXTRA_EMAIL = "registration_email"
+    }
     private lateinit var role: MaterialAutoCompleteTextView; private lateinit var identifier: TextInputEditText
     private lateinit var email: TextInputEditText; private lateinit var password: TextInputEditText; private lateinit var confirm: TextInputEditText
     private lateinit var status: TextView; private lateinit var start: MaterialButton; private lateinit var resetExistingPassword: MaterialButton; private lateinit var resend: MaterialButton; private lateinit var complete: MaterialButton
     private var registrationToken = ""; private var registeredEmail = ""; private var registeredPassword = ""
     override fun onCreate(state: Bundle?) { super.onCreate(state); setContentView(R.layout.activity_registration); setupToolbar(findViewById<MaterialToolbar>(R.id.toolbar), "Register account")
         role=findViewById(R.id.roleDropdown); identifier=findViewById(R.id.usernameInput); email=findViewById(R.id.emailInput); password=findViewById(R.id.passwordInput); confirm=findViewById(R.id.confirmPasswordInput); status=findViewById(R.id.activationStatusText); start=findViewById(R.id.registerAccountButton); resetExistingPassword=findViewById(R.id.resetExistingFirebasePasswordButton); resend=findViewById(R.id.resendActivationOtpButton); complete=findViewById(R.id.sendActivationOtpButton)
-        role.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, listOf("Student", "Teacher"))); role.setText("Student", false)
+        role.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, listOf("Student", "Teacher"))); role.setText(intent.getStringExtra(EXTRA_ROLE) ?: "Student", false)
+        identifier.setText(intent.getStringExtra(EXTRA_IDENTIFIER).orEmpty())
+        email.setText(intent.getStringExtra(EXTRA_EMAIL).orEmpty())
         start.setOnClickListener { startRegistration() }; resetExistingPassword.setOnClickListener { resetExistingFirebasePassword() }; resend.setOnClickListener { resendEmail() }; complete.setOnClickListener { completeRegistration() }
     }
     private fun selectedRole() = Role.fromLabel(role.text?.toString().orEmpty()).name.lowercase()

@@ -21,12 +21,12 @@ class RegistrationActivity : BaseActivity() {
     companion object { private const val TAG = "RegistrationActivity" }
     private lateinit var role: MaterialAutoCompleteTextView; private lateinit var identifier: TextInputEditText
     private lateinit var email: TextInputEditText; private lateinit var password: TextInputEditText; private lateinit var confirm: TextInputEditText
-    private lateinit var status: TextView; private lateinit var start: MaterialButton; private lateinit var resend: MaterialButton; private lateinit var complete: MaterialButton
+    private lateinit var status: TextView; private lateinit var start: MaterialButton; private lateinit var resetExistingPassword: MaterialButton; private lateinit var resend: MaterialButton; private lateinit var complete: MaterialButton
     private var registrationToken = ""; private var registeredEmail = ""; private var registeredPassword = ""
     override fun onCreate(state: Bundle?) { super.onCreate(state); setContentView(R.layout.activity_registration); setupToolbar(findViewById<MaterialToolbar>(R.id.toolbar), "Register account")
-        role=findViewById(R.id.roleDropdown); identifier=findViewById(R.id.usernameInput); email=findViewById(R.id.emailInput); password=findViewById(R.id.passwordInput); confirm=findViewById(R.id.confirmPasswordInput); status=findViewById(R.id.activationStatusText); start=findViewById(R.id.registerAccountButton); resend=findViewById(R.id.resendActivationOtpButton); complete=findViewById(R.id.sendActivationOtpButton)
+        role=findViewById(R.id.roleDropdown); identifier=findViewById(R.id.usernameInput); email=findViewById(R.id.emailInput); password=findViewById(R.id.passwordInput); confirm=findViewById(R.id.confirmPasswordInput); status=findViewById(R.id.activationStatusText); start=findViewById(R.id.registerAccountButton); resetExistingPassword=findViewById(R.id.resetExistingFirebasePasswordButton); resend=findViewById(R.id.resendActivationOtpButton); complete=findViewById(R.id.sendActivationOtpButton)
         role.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, listOf("Student", "Teacher"))); role.setText("Student", false)
-        start.setOnClickListener { startRegistration() }; resend.setOnClickListener { resendEmail() }; complete.setOnClickListener { completeRegistration() }
+        start.setOnClickListener { startRegistration() }; resetExistingPassword.setOnClickListener { resetExistingFirebasePassword() }; resend.setOnClickListener { resendEmail() }; complete.setOnClickListener { completeRegistration() }
     }
     private fun selectedRole() = Role.fromLabel(role.text?.toString().orEmpty()).name.lowercase()
     private fun failureText(error: Throwable?, fallback: String): String {
@@ -37,7 +37,7 @@ class RegistrationActivity : BaseActivity() {
     }
     private fun startRegistration() { val id=identifier.text?.toString().orEmpty().trim(); registeredEmail=email.text?.toString().orEmpty().trim(); registeredPassword=password.text?.toString().orEmpty(); val c=confirm.text?.toString().orEmpty()
         if(id.isBlank()||registeredEmail.isBlank()||registeredPassword.length<8||registeredPassword!=c){ Toast.makeText(this,"Enter a school ID, real email, and matching 8-character password.",Toast.LENGTH_LONG).show(); return }
-        start.isEnabled=false; status.text="Checking your school record..."
+        start.isEnabled=false; resetExistingPassword.visibility=View.GONE; status.text="Checking your school record..."
         // New emails are created safely on Flask. Do not first sign in to Firebase: that call
         // is expected to fail for a new email and was causing the misleading timeout.
         startRegistrationOnServer(id,c,"")
@@ -107,7 +107,26 @@ class RegistrationActivity : BaseActivity() {
             }
             .addOnFailureListener { error ->
                 start.isEnabled = true
+                resetExistingPassword.visibility = View.VISIBLE
                 status.text = failureText(error, "This email already exists. Enter its correct Firebase password.")
+            }
+    }
+
+    /** Recover an existing pending Firebase identity without exposing any server credential. */
+    private fun resetExistingFirebasePassword() {
+        if (registeredEmail.isBlank()) {
+            status.text = "Enter the existing Firebase email first."
+            return
+        }
+        resetExistingPassword.isEnabled = false
+        FirebaseAuth.getInstance().sendPasswordResetEmail(registeredEmail)
+            .addOnSuccessListener {
+                resetExistingPassword.isEnabled = true
+                status.text = "Firebase password-reset email sent. Set a new password, return here, then register with it."
+            }
+            .addOnFailureListener { error ->
+                resetExistingPassword.isEnabled = true
+                status.text = failureText(error, "Firebase could not send the password-reset email.")
             }
     }
 

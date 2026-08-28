@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/splashRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@drawable/bg_splash_screen"
+    android:padding="@dimen/screen_padding">
+
+    <View
+        android:id="@+id/splashGlowOne"
+        android:layout_width="190dp"
+        android:layout_height="190dp"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="-62dp"
+        android:layout_marginTop="70dp"
+        android:alpha="0.28"
+        android:background="@drawable/bg_splash_orb" />
+
+    <View
+        android:id="@+id/splashGlowTwo"
+        android:layout_width="230dp"
+        android:layout_height="230dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="-84dp"
+        android:layout_marginBottom="92dp"
+        android:alpha="0.22"
+        android:background="@drawable/bg_splash_orb" />
+
+    <LinearLayout
+        android:id="@+id/splashContent"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="center"
+        android:gravity="center"
+        android:orientation="vertical">
+
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/splashLogoCard"
+            android:layout_width="218dp"
+            android:layout_height="218dp"
+            app:cardBackgroundColor="#1FFFFFFF"
+            app:cardCornerRadius="109dp"
+            app:cardElevation="14dp"
+            app:strokeColor="#55FFFFFF"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:gravity="center"
+                android:orientation="vertical"
+                android:padding="2dp">
+
+                <ImageView
+                    android:id="@+id/splashCrest"
+                    android:layout_width="216dp"
+                    android:layout_height="216dp"
+                    android:adjustViewBounds="true"
+                    android:contentDescription="@string/full_school_name"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/newlogoschool_clean" />
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <TextView
+            android:id="@+id/splashTitle"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="26dp"
+            android:gravity="center"
+            android:text="@string/full_school_name"
+            android:textAlignment="center"
+            android:textColor="@android:color/white"
+            android:textSize="32sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/splashTagline"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center"
+            android:text="Where learning feels personal, disciplined, and future-ready."
+            android:textAlignment="center"
+            android:textColor="#EBFBFF"
+            android:textSize="16sp" />
+
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/splashProgress"
+            android:layout_width="160dp"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="28dp"
+            android:indeterminate="true"
+            app:indicatorColor="@android:color/white"
+            app:trackColor="#66FFFFFF" />
+    </LinearLayout>
+
+    <TextView
+        android:id="@+id/splashChairmanText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom|center_horizontal"
+        android:layout_marginBottom="22dp"
+        android:gravity="center"
+        android:text="Hon'ble Chairman Sh. Naresh Walia welcomes you"
+        android:textAlignment="center"
+        android:textColor="#F8FEFF"
+        android:textSize="15sp"
+        android:textStyle="bold" />
+</FrameLayout>

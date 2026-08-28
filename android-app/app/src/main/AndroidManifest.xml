@@ -1,0 +1,135 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+
+    <application
+        android:name=".SchoolApplication"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@drawable/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.SchoolMS">
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="cns_realtime_updates" />
+
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_icon"
+            android:resource="@drawable/ic_school_notification" />
+
+        <activity
+            android:name=".ui.TimetableActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.FacilitiesActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.OurScholarsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.OurStaffActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.ClassRecordsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.StudentManagementActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.StudentDetailActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.ProfileActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.MarksActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.GradeEntryActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.HomeworkActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.AttendanceActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.AdmissionEnquiryActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.FeedbackActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.ContentActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.GalleryActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.InfoListActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.QuizActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.RoleDashboardActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.MainDashboardActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.PendingApprovalsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.RegistrationActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.LoginActivity"
+            android:exported="true" />
+        <activity
+            android:name=".ui.PasswordRecoveryActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.PasswordResetRequestActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.PasswordResetRequestsActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.ClassManagementActivity"
+            android:exported="false" />
+        <activity
+            android:name=".ui.SplashActivity"
+            android:exported="true"
+            android:theme="@style/Theme.SchoolMS.Splash">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".firebase.SchoolMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
+    </application>
+
+</manifest>

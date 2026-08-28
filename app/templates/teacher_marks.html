@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">Enter Marks</h1>
+            <form method="post">
+                <select class="form-select mb-3" name="student_id" required>
+                    <option value="">Select Student</option>
+                    {% for student in students %}
+                    <option value="{{ student.id }}">{{ student.full_name }} ({{ student.class_name }})</option>
+                    {% endfor %}
+                </select>
+                <select class="form-select mb-3" name="class_id" required>
+                    <option value="">Select Class</option>
+                    {% for class_row in classes %}
+                    <option value="{{ class_row.id }}">{{ class_row.class_name }}</option>
+                    {% endfor %}
+                </select>
+                <select class="form-select mb-3" name="subject_id" required>
+                    <option value="">Select Subject</option>
+                    {% for subject in subjects %}
+                    <option value="{{ subject.id }}">{{ subject.name }}</option>
+                    {% endfor %}
+                </select>
+                <input class="form-control mb-3" name="exam_name" placeholder="Exam name" required>
+                <input type="number" class="form-control mb-3" name="total_marks" placeholder="Total marks" required>
+                <input type="number" class="form-control mb-3" name="obtained_marks" placeholder="Obtained marks" required>
+                <button class="btn btn-primary w-100">Save Marks</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Marks History</h2>
+            <table class="table">
+                <thead><tr><th>Student</th><th>Exam</th><th>Subject</th><th>Score</th><th>Grade</th></tr></thead>
+                <tbody>
+                {% for mark in marks %}
+                    <tr><td>{{ mark.student_name }}</td><td>{{ mark.exam_name }}</td><td>{{ mark.subject_name }}</td><td>{{ mark.obtained_marks }}/{{ mark.total_marks }}</td><td>{{ mark.grade }}</td></tr>
+                {% else %}
+                    <tr><td colspan="5">No marks entered yet.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

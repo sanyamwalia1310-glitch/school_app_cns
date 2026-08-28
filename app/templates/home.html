@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero-card p-4 mb-4">
+    <h1 class="h2">Professional School Management Portal</h1>
+    <p class="mb-0">Academic operations, admissions, events, timetable, and communication in one place.</p>
+</div>
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3 h-100">
+            <h2 class="h5">Facilities</h2>
+            {% for item in facilities %}
+            <div class="border-bottom py-2">
+                <div class="fw-semibold">{{ item.title }}</div>
+                <div class="small text-muted">{{ item.description }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card p-3 h-100">
+            <h2 class="h5">Upcoming Events</h2>
+            {% for item in events %}
+            <div class="border-bottom py-2">
+                <div class="fw-semibold">{{ item.title }}</div>
+                <div class="small text-muted">{{ item.event_date }} | {{ item.venue }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    <div class="col-lg-4">
+        <div class="card p-3 h-100">
+            <h2 class="h5">Announcements</h2>
+            {% for item in announcements %}
+            <div class="border-bottom py-2">
+                <div class="fw-semibold">{{ item.title }}</div>
+                <div class="small text-muted">{{ item.content }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

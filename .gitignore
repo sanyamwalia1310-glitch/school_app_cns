@@ -1,0 +1,46 @@
+.env
+.env.*
+!.env.example
+
+# Server secrets and credentials
+firebase-service-account*.json
+*service-account*.json
+serviceAccountKey.json
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Android signing material and local SDK configuration
+*.jks
+*.keystore
+keystore.properties
+*-keystore.properties
+local.properties
+google-services.json
+
+# Python and local data
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+instance/
+app/uploads/
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated IDE and build artifacts
+.gradle/
+.idea/
+.kotlin/
+build/
+**/build/
+*.apk
+*.aab
+*.iml
+desktop.ini
+
+# Never commit real client or server Firebase configuration. Keep only the
+# checked-in example configuration for fresh Android setups.
+firebase-adminsdk-*.json

@@ -1,0 +1,43 @@
+:root {
+    --primary-color: #1f4b99;
+    --secondary-color: #edf3ff;
+    --accent-color: #0f766e;
+    --text-color: #1f2937;
+    --card-shadow: 0 12px 28px rgba(15, 23, 42, 0.08);
+}
+
+body {
+    background: linear-gradient(180deg, #f4f7fb 0%, #eef6f3 100%);
+    color: var(--text-color);
+}
+
+.navbar-brand {
+    font-weight: 700;
+    letter-spacing: 0.04em;
+}
+
+.hero-card,
+.card {
+    border: 0;
+    box-shadow: var(--card-shadow);
+    border-radius: 1rem;
+}
+
+.hero-card {
+    background: linear-gradient(135deg, #1f4b99, #0f766e);
+    color: #fff;
+}
+
+.stat-card {
+    background: #fff;
+    border-left: 5px solid var(--primary-color);
+}
+
+.table thead {
+    background: var(--secondary-color);
+}
+
+.badge-soft {
+    background: rgba(31, 75, 153, 0.12);
+    color: var(--primary-color);
+}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card p-4">
+            <h1 class="h4 mb-3">Student Profile</h1>
+            <form method="post">
+                <div class="row g-3">
+                    <div class="col-md-6"><input class="form-control" value="{{ profile.full_name }}" disabled></div>
+                    <div class="col-md-6"><input class="form-control" value="{{ profile.class_name }}" disabled></div>
+                    <div class="col-md-6"><input class="form-control" value="{{ profile.roll_no }}" disabled></div>
+                    <div class="col-md-6"><input class="form-control" name="email" value="{{ profile.email or '' }}" placeholder="Email"></div>
+                    <div class="col-md-6">
+                        <input class="form-control" value="{{ profile.verified_phone or profile.phone or '' }}" placeholder="Verified mobile number" readonly>
+                        <div class="form-text">Change your registered mobile number through school administration.</div>
+                    </div>
+                    <div class="col-md-6"><input class="form-control" name="guardian_name" value="{{ profile.guardian_name or '' }}" placeholder="Guardian name"></div>
+                    <div class="col-12"><textarea class="form-control" name="address" rows="3" placeholder="Address">{{ profile.address or '' }}</textarea></div>
+                </div>
+                <button class="btn btn-primary mt-3">Update Profile</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

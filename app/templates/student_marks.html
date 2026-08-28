@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3">
+    <h1 class="h4 mb-3">Marks and Grades</h1>
+    <table class="table">
+        <thead><tr><th>Exam</th><th>Subject</th><th>Score</th><th>Grade</th></tr></thead>
+        <tbody>
+        {% for row in rows %}
+            <tr><td>{{ row.exam_name }}</td><td>{{ row.subject_name }}</td><td>{{ row.obtained_marks }}/{{ row.total_marks }}</td><td>{{ row.grade }}</td></tr>
+        {% else %}
+            <tr><td colspan="4">No marks found.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

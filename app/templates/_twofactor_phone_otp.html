@@ -1,0 +1,67 @@
+{% if twofactor_configured %}
+<script>
+    (() => {
+        const form = document.getElementById("phone-auth-form");
+        const phoneInput = document.getElementById("phone");
+        const sendButton = document.getElementById("send-otp");
+        const resendButton = document.getElementById("resend-otp");
+        const status = document.getElementById("otp-status");
+        const purpose = form.dataset.otpPurpose;
+        const identifierInput = document.getElementById("username");
+        const roleInput = document.getElementById("role");
+        let cooldownTimer;
+
+        function normaliseIndianPhone(value) {
+            const digits = value.replace(/\D/g, "");
+            if (digits.length === 10) return `+91${digits}`;
+            if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+            throw new Error("Enter a valid Indian 10-digit mobile number.");
+        }
+
+        function startCooldown(seconds) {
+            let remaining = seconds;
+            sendButton.disabled = true;
+            resendButton.disabled = true;
+            clearInterval(cooldownTimer);
+            cooldownTimer = setInterval(() => {
+                remaining -= 1;
+                resendButton.textContent = remaining > 0 ? `Resend OTP (${remaining}s)` : "Resend OTP";
+                if (remaining <= 0) {
+                    clearInterval(cooldownTimer);
+                    resendButton.disabled = false;
+                }
+            }, 1000);
+        }
+
+        async function sendOtp() {
+            try {
+                const phone = normaliseIndianPhone(phoneInput.value);
+                phoneInput.value = phone;
+                sendButton.disabled = true;
+                resendButton.disabled = true;
+                status.textContent = "Sending OTP...";
+                const response = await fetch("{{ url_for('main.send_twofactor_otp') }}", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ purpose, phone, username: identifierInput ? identifierInput.value.trim() : "", role: roleInput ? roleInput.value : "" })
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Unable to send OTP.");
+                status.textContent = "OTP request accepted by the SMS provider. It may take up to a minute; if it does not arrive, use Resend OTP and check the provider delivery report.";
+                document.getElementById("otp").focus();
+                startCooldown(result.cooldown || 60);
+            } catch (error) {
+                status.textContent = error.message || "Unable to send OTP. Please try again.";
+                sendButton.disabled = false;
+            }
+        }
+
+        sendButton.addEventListener("click", sendOtp);
+        resendButton.addEventListener("click", sendOtp);
+    })();
+</script>
+{% else %}
+<div class="alert alert-warning mt-3 mb-0">
+    SMS OTP is not configured yet. Add TWOFACTOR_API_KEY on the server before sending an OTP.
+</div>
+{% endif %}

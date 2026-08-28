@@ -1,0 +1,77 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function ownsUsername(username) {
+      return signedIn() &&
+        request.auth.token.email is string &&
+        request.auth.token.email.lower() == username.lower() + "@cns-paunta.app";
+    }
+
+    function changedKeys() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Transitional legacy document.  Its restrictions cannot be tightened until
+    // every private flow has moved to authenticated Flask APIs/profile documents.
+    // New school-wide content must use public_content/schoolhub instead.
+    match /shared_state/schoolhub {
+      allow read: if signedIn();
+      allow create: if isAdmin();
+      allow update: if isAdmin() ||
+        (
+          signedIn() &&
+          !changedKeys().hasAny(["users", "deleted_accounts", "approved_accounts", "student_recovery_archives"])
+        );
+      allow delete: if isAdmin();
+    }
+
+    // This document may contain only published school-wide content: announcements,
+    // events, facilities, gallery metadata, timetable, contacts and update notices.
+    // No user records, marks, attendance, submissions or profile data belongs here.
+    match /public_content/schoolhub {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /registration_requests/{username} {
+      allow read: if isAdmin() || (signedIn() && resource.data.authUid == request.auth.uid);
+      allow create: if signedIn() &&
+        request.resource.data.authUid == request.auth.uid &&
+        request.resource.data.username == username;
+      allow update: if isAdmin() || (
+        signedIn() &&
+        resource.data.authUid == request.auth.uid &&
+        request.resource.data.authUid == request.auth.uid &&
+        request.resource.data.username == username
+      );
+      allow delete: if isAdmin() || (signedIn() && resource.data.authUid == request.auth.uid);
+    }
+
+    match /password_reset_requests/{username} {
+      allow read, update, delete: if isAdmin();
+      allow create: if false;
+    }
+
+    match /personal_notifications/{username} {
+      allow read: if isAdmin() || ownsUsername(username);
+      allow write: if false;
+    }
+
+    match /personal_events/{eventId} {
+      allow create: if signedIn();
+      allow read, update, delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

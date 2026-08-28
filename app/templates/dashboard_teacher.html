@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero-card p-4 mb-4">
+    <h1 class="h3">Teacher Dashboard</h1>
+    <p class="mb-0">Manage assigned classes, homework, marks, attendance, and communication.</p>
+</div>
+<div class="row g-3 mb-4">
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Assigned Classes</h6><div class="display-6">{{ classes|length }}</div></div></div>
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Homework Created</h6><div class="display-6">{{ homework_count }}</div></div></div>
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Announcements</h6><div class="display-6">{{ announcements|length }}</div></div></div>
+</div>
+<div class="row g-3">
+    <div class="col-lg-5">
+        <div class="card p-3">
+            <h2 class="h5">Actions</h2>
+            <div class="d-grid gap-2">
+                <a class="btn btn-outline-primary" href="{{ url_for('main.teacher_classes') }}">Class Management</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.teacher_homework') }}">Homework</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.teacher_marks') }}">Marks & Grades</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.announcements') }}">Announcements</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card p-3">
+            <h2 class="h5">Assigned Classes</h2>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead><tr><th>Class</th><th>Students</th><th></th></tr></thead>
+                    <tbody>
+                    {% for class_row in classes %}
+                        <tr>
+                            <td>{{ class_row.name }} - {{ class_row.section }}</td>
+                            <td>{{ class_row.student_count }}</td>
+                            <td><a class="btn btn-sm btn-primary" href="{{ url_for('main.teacher_class_detail', class_id=class_row.id) }}">Open</a></td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="3">No class assigned.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

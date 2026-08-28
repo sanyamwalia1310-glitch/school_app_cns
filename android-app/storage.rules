@@ -1,0 +1,52 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
+    function validUpload(maxBytes) {
+      return request.resource.size <= maxBytes &&
+        request.resource.contentType.matches('image/.*|application/pdf|text/plain|application/vnd.openxmlformats-officedocument.*');
+    }
+
+    match /homework_submissions/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && validUpload(10 * 1024 * 1024);
+      allow delete: if signedIn();
+    }
+
+    match /profiles/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if signedIn() && validUpload(5 * 1024 * 1024);
+      allow delete: if signedIn();
+    }
+
+    match /homework/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() && validUpload(10 * 1024 * 1024);
+      allow delete: if isAdmin();
+    }
+
+    match /gallery/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() && validUpload(5 * 1024 * 1024);
+      allow delete: if isAdmin();
+    }
+
+    match /facilities/{fileName} {
+      allow read: if signedIn();
+      allow create, update: if isAdmin() && validUpload(5 * 1024 * 1024);
+      allow delete: if isAdmin();
+    }
+
+    match /{allPaths=**} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+  }
+}

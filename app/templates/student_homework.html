@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3">
+    <h1 class="h4 mb-3">Homework and Submissions</h1>
+    <table class="table">
+        <thead><tr><th>Title</th><th>Subject</th><th>Due</th><th>Status</th><th>Submit</th></tr></thead>
+        <tbody>
+        {% for item in rows %}
+            <tr>
+                <td>{{ item.title }}</td>
+                <td>{{ item.subject_name }}</td>
+                <td>{{ item.due_date }}</td>
+                <td>
+                    {% if item.submission_id %}
+                        Submitted on {{ item.submitted_at }}
+                    {% else %}
+                        Pending
+                    {% endif %}
+                </td>
+                <td>
+                    {% if not item.submission_id %}
+                    <form method="post" enctype="multipart/form-data">
+                        <input type="hidden" name="homework_id" value="{{ item.id }}">
+                        <input type="text" class="form-control mb-2" name="notes" placeholder="Notes">
+                        <input type="file" class="form-control mb-2" name="submission_file">
+                        <button class="btn btn-sm btn-primary">Submit</button>
+                    </form>
+                    {% else %}
+                        <span class="text-success">Completed</span>
+                    {% endif %}
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="5">No homework assigned.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

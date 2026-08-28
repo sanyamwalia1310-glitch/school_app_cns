@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero-card p-4 mb-4">
+    <h1 class="h3">Student Dashboard</h1>
+    <p class="mb-0">Track attendance, homework, marks, and profile details from one place.</p>
+</div>
+<div class="row g-3 mb-4">
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Class</h6><div class="fs-4">{{ profile.class_name or 'Not assigned' }}</div></div></div>
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Attendance</h6><div class="display-6">{{ attendance_percentage|percentage }}</div></div></div>
+    <div class="col-md-4"><div class="card stat-card p-3"><h6>Recent Marks</h6><div class="display-6">{{ marks|length }}</div></div></div>
+</div>
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h2 class="h5">Student Services</h2>
+            <div class="d-grid gap-2">
+                <a class="btn btn-outline-primary" href="{{ url_for('main.student_profile') }}">Profile Management</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.student_attendance') }}">Attendance</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.student_homework') }}">Homework</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.student_marks') }}">Marks</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Recent Results</h2>
+            <table class="table">
+                <thead><tr><th>Exam</th><th>Subject</th><th>Score</th><th>Grade</th></tr></thead>
+                <tbody>
+                {% for item in marks %}
+                    <tr><td>{{ item.exam_name }}</td><td>{{ item.subject_name }}</td><td>{{ item.obtained_marks }}/{{ item.total_marks }}</td><td>{{ item.grade }}</td></tr>
+                {% else %}
+                    <tr><td colspan="4">No marks available.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="card p-3">
+            <h2 class="h5">Announcements</h2>
+            {% for item in announcements %}
+                <div class="border-bottom py-2">
+                    <div class="fw-semibold">{{ item.title }}</div>
+                    <div class="small text-muted">{{ item.content }}</div>
+                </div>
+            {% else %}
+                <p class="mb-0">No announcements available.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

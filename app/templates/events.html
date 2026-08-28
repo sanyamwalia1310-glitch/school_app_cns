@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+    <h1 class="h3 mb-3">Events</h1>
+    <table class="table">
+        <thead><tr><th>Event</th><th>Date</th><th>Venue</th><th>Description</th></tr></thead>
+        <tbody>
+        {% for item in rows %}
+        <tr>
+            <td>{{ item.title }}</td>
+            <td>{{ item.event_date }}</td>
+            <td>{{ item.venue }}</td>
+            <td>{{ item.description }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

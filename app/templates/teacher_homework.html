@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">Create Homework</h1>
+            <form method="post" enctype="multipart/form-data">
+                <select class="form-select mb-3" name="class_id" required>
+                    <option value="">Select Class</option>
+                    {% for class_row in teacher_classes %}
+                    <option value="{{ class_row.id }}">{{ class_row.name }} - {{ class_row.section }}</option>
+                    {% endfor %}
+                </select>
+                <select class="form-select mb-3" name="subject_id" required>
+                    <option value="">Select Subject</option>
+                    {% for subject in available_subjects %}
+                    <option value="{{ subject.id }}">{{ subject.name }}</option>
+                    {% endfor %}
+                </select>
+                <input class="form-control mb-3" name="title" placeholder="Homework title" required>
+                <textarea class="form-control mb-3" name="description" rows="4" placeholder="Description" required></textarea>
+                <input type="date" class="form-control mb-3" name="due_date" required>
+                <input type="file" class="form-control mb-3" name="attachment">
+                <button class="btn btn-primary w-100">Publish Homework</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Homework List</h2>
+            <table class="table">
+                <thead><tr><th>Title</th><th>Class</th><th>Subject</th><th>Due Date</th><th>File</th></tr></thead>
+                <tbody>
+                {% for item in homework %}
+                    <tr>
+                        <td>{{ item.title }}</td>
+                        <td>{{ item.class_name }}</td>
+                        <td>{{ item.subject_name }}</td>
+                        <td>{{ item.due_date }}</td>
+                        <td>
+                            {% if item.file_name %}
+                            <a href="{{ url_for('main.uploaded_file', filename=item.file_name) }}">Download</a>
+                            {% else %}
+                            No file
+                            {% endif %}
+                        </td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="5">No homework created.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

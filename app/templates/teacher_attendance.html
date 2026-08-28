@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">Mark Attendance</h1>
+            <form method="post">
+                <select class="form-select mb-3" name="subject_id" required>
+                    <option value="">Select Subject</option>
+                    {% for subject in subjects %}
+                    <option value="{{ subject.id }}">{{ subject.name }}</option>
+                    {% endfor %}
+                </select>
+                <input type="date" class="form-control mb-3" name="attendance_date" value="{{ today }}" required>
+                {% for student in students %}
+                <div class="border rounded p-2 mb-2">
+                    <div class="fw-semibold">{{ student.roll_no }} - {{ student.full_name }}</div>
+                    <div class="mt-2">
+                        <label class="me-3"><input type="radio" name="status_{{ student.id }}" value="present" checked> Present</label>
+                        <label><input type="radio" name="status_{{ student.id }}" value="absent"> Absent</label>
+                    </div>
+                </div>
+                {% endfor %}
+                <button class="btn btn-primary w-100">Save Attendance</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card p-3">
+            <h2 class="h5">Attendance Summary</h2>
+            <table class="table">
+                <thead><tr><th>Roll No</th><th>Name</th><th>Attendance %</th></tr></thead>
+                <tbody>
+                {% for row in attendance_summary %}
+                    {% set total = row.total_days or 0 %}
+                    {% set present = row.present_days or 0 %}
+                    {% set percent = (present / total * 100) if total else 0 %}
+                    <tr><td>{{ row.roll_no }}</td><td>{{ row.full_name }}</td><td>{{ percent|percentage }}</td></tr>
+                {% else %}
+                    <tr><td colspan="3">No attendance records available.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

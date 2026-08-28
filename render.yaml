@@ -1,0 +1,31 @@
+services:
+  - type: web
+    name: school-management-app
+    env: python
+    buildCommand: "python -m pip install -r requirements.txt"
+    startCommand: "gunicorn --workers 2 --bind 0.0.0.0:$PORT wsgi:app"
+    envVars:
+      - key: FLASK_SECRET_KEY
+        generateValue: true
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: FIREBASE_AUTH_EMAIL_DOMAIN
+        sync: false
+      - key: FIREBASE_WEB_API_KEY
+        sync: false
+      - key: FIREBASE_WEB_AUTH_DOMAIN
+        sync: false
+      - key: FIREBASE_WEB_PROJECT_ID
+        sync: false
+      - key: FIREBASE_WEB_APP_ID
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+      - key: TWOFACTOR_API_KEY
+        sync: false

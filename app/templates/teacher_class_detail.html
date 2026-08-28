@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-5">
+        <div class="card p-3">
+            <h1 class="h4">{{ class_row.name }} - {{ class_row.section }}</h1>
+            <p class="text-muted mb-0">Students currently enrolled in this class.</p>
+            <table class="table mt-3">
+                <thead><tr><th>Roll No</th><th>Name</th></tr></thead>
+                <tbody>
+                {% for student in students %}
+                    <tr><td>{{ student.roll_no }}</td><td>{{ student.full_name }}</td></tr>
+                {% else %}
+                    <tr><td colspan="2">No students assigned.</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    <div class="col-lg-7">
+        <div class="card p-3">
+            <h2 class="h5">Subjects</h2>
+            <div class="d-flex flex-wrap gap-2">
+                {% for subject in subjects %}
+                    <span class="badge badge-soft p-2">{{ subject.name }} ({{ subject.code }})</span>
+                {% else %}
+                    <p class="mb-0">No subjects assigned.</p>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

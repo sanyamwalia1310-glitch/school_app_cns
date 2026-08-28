@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">New Announcement</h1>
+            <form method="post">
+                <input class="form-control mb-3" name="title" placeholder="Title" required>
+                <textarea class="form-control mb-3" name="content" rows="4" placeholder="Announcement text" required></textarea>
+                <select class="form-select mb-3" name="audience" required>
+                    <option value="all">All</option>
+                    <option value="admin">Admin</option>
+                    <option value="teacher">Teacher</option>
+                    <option value="student">Student</option>
+                </select>
+                <button class="btn btn-primary w-100">Publish</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Announcement Feed</h2>
+            {% for item in announcements %}
+                <div class="border-bottom py-3">
+                    <div class="d-flex justify-content-between">
+                        <div class="fw-semibold">{{ item.title }}</div>
+                        <span class="badge badge-soft">{{ item.audience|title }}</span>
+                    </div>
+                    <div class="small text-muted mt-1">{{ item.content }}</div>
+                    <div class="small mt-1">By {{ item.creator_name }}</div>
+                </div>
+            {% else %}
+                <p class="mb-0">No announcements found.</p>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}

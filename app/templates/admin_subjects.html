@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">Add Subject</h1>
+            <form method="post">
+                <input class="form-control mb-3" name="name" placeholder="Subject name" required>
+                <input class="form-control mb-3" name="code" placeholder="Subject code" required>
+                <button class="btn btn-primary w-100">Add Subject</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Subjects</h2>
+            <table class="table">
+                <thead><tr><th>Name</th><th>Code</th></tr></thead>
+                <tbody>
+                {% for subject in subjects %}
+                    <tr><td>{{ subject.name }}</td><td>{{ subject.code }}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

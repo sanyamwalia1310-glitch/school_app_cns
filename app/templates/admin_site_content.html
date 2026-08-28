@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero-card p-4 mb-4">
+    <h1 class="h3">Site Content Management</h1>
+    <p class="mb-0">Manage facilities, events, timetable, admission enquiries, and feedback.</p>
+</div>
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Add Facility</h2>
+            <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="form_type" value="facility">
+                <input class="form-control mb-2" name="title" placeholder="Title" required>
+                <input class="form-control mb-2" name="icon" placeholder="Icon name">
+                <textarea class="form-control mb-2" name="description" rows="3" placeholder="Description" required></textarea>
+                <input class="form-control mb-2" type="file" name="image" accept="image/*">
+                <button class="btn btn-primary w-100">Save Facility</button>
+            </form>
+        </div>
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Add Event</h2>
+            <form method="post" enctype="multipart/form-data">
+                <input type="hidden" name="form_type" value="event">
+                <input class="form-control mb-2" name="title" placeholder="Title" required>
+                <textarea class="form-control mb-2" name="description" rows="3" placeholder="Description" required></textarea>
+                <input class="form-control mb-2" type="date" name="event_date" required>
+                <input class="form-control mb-2" name="venue" placeholder="Venue" required>
+                <input class="form-control mb-2" type="file" name="image" accept="image/*">
+                <button class="btn btn-primary w-100">Save Event</button>
+            </form>
+        </div>
+        <div class="card p-3">
+            <h2 class="h5">Add Timetable Entry</h2>
+            <form method="post">
+                <input type="hidden" name="form_type" value="timetable">
+                <select class="form-select mb-2" name="class_id" required>
+                    {% for class_row in classes %}
+                    <option value="{{ class_row.id }}">{{ class_row.class_name }}</option>
+                    {% endfor %}
+                </select>
+                <select class="form-select mb-2" name="subject_id" required>
+                    {% for subject in subjects %}
+                    <option value="{{ subject.id }}">{{ subject.name }}</option>
+                    {% endfor %}
+                </select>
+                <select class="form-select mb-2" name="day_name" required>
+                    <option>Monday</option><option>Tuesday</option><option>Wednesday</option><option>Thursday</option><option>Friday</option><option>Saturday</option>
+                </select>
+                <input class="form-control mb-2" type="time" name="start_time" required>
+                <input class="form-control mb-2" type="time" name="end_time" required>
+                <input class="form-control mb-2" name="room" placeholder="Room">
+                <button class="btn btn-primary w-100">Save Entry</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Facilities</h2>
+            <table class="table"><thead><tr><th>Title</th><th>Description</th><th>Image</th></tr></thead><tbody>{% for item in facilities_rows %}<tr><td>{{ item.title }}</td><td>{{ item.description }}</td><td>{% if item.image_url %}<img src="{{ item.image_url }}" alt="" style="max-height:56px">{% endif %}</td></tr>{% endfor %}</tbody></table>
+        </div>
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Events</h2>
+            <table class="table"><thead><tr><th>Title</th><th>Date</th><th>Venue</th><th>Image</th></tr></thead><tbody>{% for item in event_rows %}<tr><td>{{ item.title }}</td><td>{{ item.event_date }}</td><td>{{ item.venue }}</td><td>{% if item.image_url %}<img src="{{ item.image_url }}" alt="" style="max-height:56px">{% endif %}</td></tr>{% endfor %}</tbody></table>
+        </div>
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Timetable</h2>
+            <table class="table"><thead><tr><th>Class</th><th>Day</th><th>Time</th><th>Subject</th></tr></thead><tbody>{% for item in timetable_rows %}<tr><td>{{ item.class_name }}</td><td>{{ item.day_name }}</td><td>{{ item.start_time }} - {{ item.end_time }}</td><td>{{ item.subject_name }}</td></tr>{% endfor %}</tbody></table>
+        </div>
+        <div class="card p-3 mb-3">
+            <h2 class="h5">Admission Enquiries</h2>
+            <table class="table"><thead><tr><th>Name</th><th>Class</th><th>Contact</th><th>Status</th></tr></thead><tbody>{% for item in admissions_rows %}<tr><td>{{ item.student_name }}</td><td>{{ item.applying_class }}</td><td>{{ item.email }} / {{ item.phone }}</td><td>{{ item.status }}</td></tr>{% endfor %}</tbody></table>
+        </div>
+        <div class="card p-3">
+            <h2 class="h5">Feedback</h2>
+            <table class="table"><thead><tr><th>Name</th><th>Category</th><th>Message</th></tr></thead><tbody>{% for item in feedback_rows %}<tr><td>{{ item.name }}</td><td>{{ item.category }}</td><td>{{ item.message }}</td></tr>{% endfor %}</tbody></table>
+        </div>
+    </div>
+</div>
+{% endblock %}

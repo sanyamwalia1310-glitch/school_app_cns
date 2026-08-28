@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+    <h1 class="h3 mb-3">School Facilities</h1>
+    <div class="row g-3">
+        {% for item in rows %}
+        <div class="col-md-6">
+            <div class="card p-3 h-100">
+                <h2 class="h5">{{ item.title }}</h2>
+                <p class="mb-0 text-muted">{{ item.description }}</p>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

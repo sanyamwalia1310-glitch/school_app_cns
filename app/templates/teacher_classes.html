@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-3">
+    <h1 class="h4 mb-3">Teacher Class Management</h1>
+    <table class="table">
+        <thead><tr><th>Class</th><th>Students</th><th>Actions</th></tr></thead>
+        <tbody>
+        {% for class_row in classes %}
+            <tr>
+                <td>{{ class_row.name }} - {{ class_row.section }}</td>
+                <td>{{ class_row.student_count }}</td>
+                <td class="d-flex gap-2">
+                    <a class="btn btn-sm btn-primary" href="{{ url_for('main.teacher_class_detail', class_id=class_row.id) }}">Details</a>
+                    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('main.teacher_attendance', class_id=class_row.id) }}">Attendance</a>
+                </td>
+            </tr>
+        {% else %}
+            <tr><td colspan="3">No assigned classes found.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

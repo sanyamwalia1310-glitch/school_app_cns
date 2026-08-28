@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card p-4">
+    <div class="d-flex justify-content-between align-items-center mb-3">
+        <h1 class="h3 mb-0">Class Timetable</h1>
+        <form method="get" class="d-flex gap-2">
+            <select class="form-select" name="class_id" onchange="this.form.submit()">
+                {% for class_row in classes %}
+                <option value="{{ class_row.id }}" {% if class_row.id == selected_class_id %}selected{% endif %}>{{ class_row.class_name }}</option>
+                {% endfor %}
+            </select>
+        </form>
+    </div>
+    <table class="table">
+        <thead><tr><th>Day</th><th>Time</th><th>Subject</th><th>Room</th></tr></thead>
+        <tbody>
+        {% for item in rows %}
+        <tr>
+            <td>{{ item.day_name }}</td>
+            <td>{{ item.start_time }} - {{ item.end_time }}</td>
+            <td>{{ item.subject_name }}</td>
+            <td>{{ item.room }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4">No timetable entries available.</td></tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}

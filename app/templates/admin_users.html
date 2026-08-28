@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row g-4">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h1 class="h4 mb-3">Create student or teacher master record</h1>
+            <form method="post">
+                <input class="form-control mb-3" name="full_name" placeholder="Full name" required>
+                <input class="form-control mb-3" name="username" placeholder="Student ID or Teacher ID" required>
+                <select class="form-select mb-3" name="role" required>
+                    <option value="teacher">Teacher</option>
+                    <option value="student">Student</option>
+                </select>
+                <button class="btn btn-primary w-100">Add Master Record</button>
+            </form>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Master records</h2>
+            <table class="table mb-4">
+                <thead><tr><th>Name</th><th>School ID</th><th>Role</th><th>Registration</th></tr></thead>
+                <tbody>{% for record in master_records %}<tr><td>{{ record.full_name }}</td><td>{{ record.school_id }}</td><td>{{ record.role|title }}</td><td>{{ 'Complete' if record.registration_completed else 'Pending' }}</td></tr>{% endfor %}</tbody>
+            </table>
+            <h2 class="h5">Existing login users</h2>
+            <table class="table">
+                <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Email status</th><th>Reset temporary password</th></tr></thead>
+                <tbody>
+                {% for user in users %}
+                    <tr><td>{{ user.full_name }}</td><td>{{ user.username }}</td><td>{{ user.role|title }}</td><td>{% if user.role in ('student', 'teacher') %}{% if user.email_verified_at %}<span class="text-success">Email verified</span><br><small>{{ user.email }}</small>{% else %}<span class="text-warning">Email missing</span>{% endif %}{% else %}Not applicable{% endif %}</td><td>{% if user.role != 'admin' %}<form method="post" action="{{ url_for('main.admin_reset_user_password', user_id=user.id) }}" class="d-flex gap-1"><input class="form-control form-control-sm" name="temporary_password" type="password" minlength="8" placeholder="New temporary password" required><button class="btn btn-sm btn-outline-primary">Reset</button></form>{% endif %}</td></tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

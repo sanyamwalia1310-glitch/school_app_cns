@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center align-items-center" style="min-height: 85vh;">
+    <div class="col-lg-5">
+        <div class="hero-card p-4 mb-4">
+            <h1 class="h3 mb-2">School Management System</h1>
+            <p class="mb-0">Secure access for administrators, teachers, and students.</p>
+        </div>
+        <div class="card p-4">
+            <h2 class="h4 mb-3">{{ 'Admin Login' if admin_only else 'Login' }}</h2>
+            <form method="post" id="{% if not admin_only %}firebase-login-form{% endif %}">
+                <div class="mb-3">
+                    <label class="form-label">{{ 'Administrator username' if admin_only else 'Registered email address (or legacy Student ID)' }}</label>
+                    <input type="text" name="username" class="form-control" autocomplete="username" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label">Password</label>
+                    <input type="password" name="password" class="form-control" autocomplete="current-password" required>
+                </div>
+                <button class="btn btn-primary w-100">Sign In</button>
+            </form>
+            {% if not admin_only %}<div class="d-flex justify-content-between mt-3 small">
+                <a href="{{ url_for('main.register_student') }}">Activate account / first login</a>
+                <a href="{{ url_for('main.forgot_password') }}">Forgot password?</a>
+            </div>
+            <div class="mt-3 small text-muted">
+                New Student and Teacher accounts sign in with their verified email address. Existing school accounts continue to work.
+            </div>
+            <div class="mt-3"><a class="btn btn-outline-secondary w-100" href="{{ url_for('main.admin_login') }}">Admin Login</a></div>
+            {% else %}<div class="mt-3 small"><a href="{{ url_for('main.login') }}">Back to Student / Teacher Login</a></div>{% endif %}
+            {% if not admin_only %}<div id="profile-selector" class="d-none mt-3"><p class="small mb-2">Choose the linked school profile:</p><div id="profile-options" class="d-grid gap-2"></div></div>{% endif %}
+        </div>
+    </div>
+</div>
+{% if not admin_only %}
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+const form=document.querySelector('#firebase-login-form'); const config={{ firebase_web_config|tojson }}; let firebaseToken='';
+async function serverLogin(path, body){const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.error||'Unable to sign in.');return data;}
+async function chooseProfile(profile){const data=await serverLogin('{{ url_for("main.select_firebase_profile") }}',{firebase_id_token:firebaseToken,profile_id:profile.id});window.location.assign(data.redirect);}
+function showProfiles(profiles){const panel=document.querySelector('#profile-selector');const options=document.querySelector('#profile-options');options.replaceChildren(...profiles.map(profile=>{const button=document.createElement('button');button.type='button';button.className='btn btn-outline-primary text-start';button.textContent=`${profile.full_name} — ${profile.identifier} (${profile.role})`;button.onclick=()=>chooseProfile(profile).catch(error=>alert(error.message));return button;}));panel.classList.remove('d-none');}
+form?.addEventListener('submit',async(event)=>{const identifier=form.elements.username.value.trim();if(!identifier.includes('@'))return;event.preventDefault();const button=form.querySelector('button');button.disabled=true;try{if(!config.apiKey||!config.authDomain||!config.projectId||!config.appId)throw new Error('Firebase Web configuration is missing on the server.');const credential=await signInWithEmailAndPassword(getAuth(initializeApp(config)),identifier,form.elements.password.value);await credential.user.reload();if(!credential.user.emailVerified)throw new Error('Please verify your email before logging in.');firebaseToken=await credential.user.getIdToken(true);const data=await serverLogin('{{ url_for("main.firebase_session_login") }}',{firebase_id_token:firebaseToken});if(data.profiles.length===1)await chooseProfile(data.profiles[0]);else showProfiles(data.profiles);}catch(error){alert(error.message||'Unable to sign in.');}finally{button.disabled=false;}});
+</script>
+{% endif %}
+{% endblock %}

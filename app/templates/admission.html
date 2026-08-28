@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="row justify-content-center">
+    <div class="col-lg-8">
+        <div class="card p-4">
+            <h1 class="h3 mb-3">Admission Enquiry</h1>
+            <form method="post">
+                <div class="row g-3">
+                    <div class="col-md-6"><input class="form-control" name="student_name" placeholder="Student name" required></div>
+                    <div class="col-md-6"><input class="form-control" type="email" name="email" placeholder="Email" required></div>
+                    <div class="col-md-6"><input class="form-control" name="phone" placeholder="Phone" required></div>
+                    <div class="col-md-6"><input class="form-control" name="applying_class" placeholder="Applying for class" required></div>
+                    <div class="col-12"><input class="form-control" name="previous_school" placeholder="Previous school"></div>
+                    <div class="col-12"><textarea class="form-control" name="message" rows="4" placeholder="Message"></textarea></div>
+                </div>
+                <button class="btn btn-primary mt-3">Submit Enquiry</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}

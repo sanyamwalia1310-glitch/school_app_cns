@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="hero-card p-4 mb-4">
+    <h1 class="h3">Admin Dashboard</h1>
+    <p class="mb-0">Manage users, classes, subjects, and school-wide announcements.</p>
+</div>
+<div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card stat-card p-3"><h6>Total Users</h6><div class="display-6">{{ stats.users }}</div></div></div>
+    <div class="col-md-3"><div class="card stat-card p-3"><h6>Students</h6><div class="display-6">{{ stats.students }}</div></div></div>
+    <div class="col-md-3"><div class="card stat-card p-3"><h6>Teachers</h6><div class="display-6">{{ stats.teachers }}</div></div></div>
+    <div class="col-md-3"><div class="card stat-card p-3"><h6>Classes</h6><div class="display-6">{{ stats.classes }}</div></div></div>
+</div>
+<div class="row g-3">
+    <div class="col-lg-4">
+        <div class="card p-3">
+            <h2 class="h5">Management</h2>
+            <div class="d-grid gap-2">
+                <a class="btn btn-outline-primary" href="{{ url_for('main.admin_users') }}">Manage Users</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.admin_classes') }}">Manage Classes</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.admin_subjects') }}">Manage Subjects</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.admin_site_content') }}">Site Content</a>
+                <a class="btn btn-outline-primary" href="{{ url_for('main.announcements') }}">Announcements</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-8">
+        <div class="card p-3">
+            <h2 class="h5">Recent Announcements</h2>
+            <div class="table-responsive">
+                <table class="table">
+                    <thead><tr><th>Title</th><th>Audience</th><th>By</th></tr></thead>
+                    <tbody>
+                    {% for item in announcements %}
+                        <tr>
+                            <td>{{ item.title }}</td>
+                            <td><span class="badge badge-soft">{{ item.audience|title }}</span></td>
+                            <td>{{ item.creator_name }}</td>
+                        </tr>
+                    {% else %}
+                        <tr><td colspan="3">No announcements found.</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

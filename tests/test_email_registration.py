@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app import create_app
+from app.database import close_db, get_db
 
 
 class EmailRegistrationTests(unittest.TestCase):
@@ -38,6 +39,46 @@ class EmailRegistrationTests(unittest.TestCase):
 
                 self.assertEqual(response.status_code, 409)
                 self.assertIn("already has a Firebase account", response.get_json()["error"])
+
+    def test_admin_can_save_an_unregistered_student_master_record(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "FLASK_DATABASE": str(Path(temp_dir) / "admin-record.db"),
+                    "FLASK_UPLOAD_FOLDER": str(Path(temp_dir) / "uploads"),
+                    "DATABASE_URL": "",
+                },
+                clear=False,
+            ):
+                app = create_app()
+                app.config.update(TESTING=True)
+                with patch("app.routes.verified_firebase_admin_uid", return_value="admin-firebase-uid"):
+                    response = app.test_client().post(
+                        "/api/mobile/admin/student-master-record",
+                        json={
+                            "firebase_id_token": "verified-token",
+                            "student_id": "STU001",
+                            "full_name": "Student A",
+                            "roll_no": "01",
+                            "guardian_name": "Parent A",
+                            "email": "parent@example.com",
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                with app.app_context():
+                    row = get_db().execute(
+                        "SELECT student_id, full_name, email, registration_completed FROM student_master_records WHERE student_id = ?",
+                        ("STU001",),
+                    ).fetchone()
+                    close_db()
+                self.assertEqual(dict(row), {
+                    "student_id": "STU001",
+                    "full_name": "Student A",
+                    "email": "parent@example.com",
+                    "registration_completed": 0,
+                })
 
 
 if __name__ == "__main__":

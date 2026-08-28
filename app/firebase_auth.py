@@ -223,3 +223,18 @@ def verified_firebase_uid(firebase_id_token: str) -> str:
         raise
     except Exception as error:
         raise FirebaseAuthProvisioningError("Unable to verify Firebase sign-in. Please try again later.") from error
+
+
+def verified_firebase_admin_uid(firebase_id_token: str) -> str:
+    """Validate a Firebase token that has the server-assigned administrator claim."""
+    auth = _firebase_auth()
+    try:
+        claims = auth.verify_id_token(firebase_id_token, check_revoked=True)
+        uid = str(claims.get("uid", "")).strip()
+        if not uid or claims.get("admin") is not True:
+            raise FirebaseAuthProvisioningError("Administrator authorization is required.")
+        return uid
+    except FirebaseAuthProvisioningError:
+        raise
+    except Exception as error:
+        raise FirebaseAuthProvisioningError("Unable to verify administrator authorization. Please try again later.") from error

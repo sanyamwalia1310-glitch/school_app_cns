@@ -38,6 +38,7 @@ from .firebase_auth import (
     firebase_identity_email,
     finalize_email_account,
     provision_firebase_password,
+    verified_firebase_admin_uid,
     verified_firebase_uid,
     verify_pending_email,
 )
@@ -834,6 +835,55 @@ def register_mobile_fcm_token():
         db.commit()
         return jsonify(message="Device notifications registered for the selected school profile.")
     except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
+@main.route("/api/mobile/admin/student-master-record", methods=["POST"])
+def upsert_mobile_student_master_record():
+    """Create or update an unregistered student master record from the Android admin screen.
+
+    The Firebase admin claim is verified on Flask.  Email is retained only in the private
+    server-side master record, never copied to public Firestore content.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        verified_firebase_admin_uid(str(payload.get("firebase_id_token", "")).strip())
+        student_id = str(payload.get("student_id", "")).strip()
+        full_name = str(payload.get("full_name", "")).strip()
+        roll_no = str(payload.get("roll_no", "")).strip()
+        guardian_name = str(payload.get("guardian_name", "")).strip()
+        email_value = str(payload.get("email", "")).strip()
+        if not student_id or len(student_id) > 120 or any(char.isspace() for char in student_id):
+            raise MobileOtpApiError("Enter a valid student ID.")
+        if not full_name or len(full_name) > 160:
+            raise MobileOtpApiError("Enter the student name.")
+        email = normalize_email(email_value) if email_value else None
+
+        db = get_db()
+        existing = db.execute("SELECT * FROM student_master_records WHERE student_id = ?", (student_id,)).fetchone()
+        if existing and (existing["registration_completed"] or existing["login_user_id"] is not None):
+            raise MobileOtpApiError("This student already has an activated account.", status_code=409)
+        if existing:
+            db.execute(
+                """UPDATE student_master_records
+                SET full_name = ?, roll_no = ?, email = ?, guardian_name = ? WHERE id = ?""",
+                (full_name, roll_no or None, email, guardian_name or None, existing["id"]),
+            )
+            record_id = existing["id"]
+        else:
+            cursor = db.execute(
+                """INSERT INTO student_master_records (student_id, full_name, roll_no, email, guardian_name)
+                VALUES (?, ?, ?, ?, ?) RETURNING id""",
+                (student_id, full_name, roll_no or None, email, guardian_name or None),
+            )
+            record_id = cursor.fetchone()["id"]
+        db.commit()
+        return jsonify(message="Student master record saved.", master_record_id=record_id)
+    except MobileOtpApiError as error:
+        get_db().rollback()
+        return jsonify(error=str(error)), error.status_code
+    except FirebaseAuthProvisioningError as error:
+        get_db().rollback()
         return jsonify(error=str(error)), 403
 
 

@@ -100,6 +100,9 @@ open class BaseActivity : AppCompatActivity() {
         SchoolRepository.addChangeListener(repositoryListener)
         SchoolRepository.refreshPersonalNotificationsForCurrentUser(true)
         SchoolRepository.refreshSharedStateOnce { }
+        // Private academic content never comes from the public Firestore document.
+        // Flask authorizes it against the active profile on every refresh.
+        SchoolRepository.refreshPrivateAcademicContent { }
         enforceForcedUpdateGateIfNeeded()
         showGlobalUpdatePromptIfNeeded()
     }

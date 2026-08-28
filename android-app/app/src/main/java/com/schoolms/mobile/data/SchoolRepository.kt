@@ -23,6 +23,7 @@ import java.net.URL
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 
@@ -84,6 +85,13 @@ object SchoolRepository {
     private val attendanceRecords = mutableListOf<AttendanceRecord>()
     private val homeworkItems = mutableListOf<HomeworkItem>()
     private val marksStore = mutableListOf<MarkItem>()
+    // These values come from Flask and are scoped to the selected Firebase profile.
+    // They are deliberately not written back to the shared Firestore state.
+    private var privateAcademicProfileId: Int? = null
+    private var privateHomeworkItems: List<HomeworkItem> = emptyList()
+    private var privateTestItems: List<MobileAcademicGateway.Test> = emptyList()
+    private var privateMarksItems: List<MarkItem> = emptyList()
+    private var privateAttendanceItems: List<DailyAttendanceMark> = emptyList()
     private val facilityItems = mutableListOf<SimpleListItem>()
     private val eventItems = mutableListOf<SimpleListItem>()
     private val announcementItems = mutableListOf<SimpleListItem>()
@@ -3023,6 +3031,9 @@ object SchoolRepository {
     }
 
     fun attendanceHistoryForStudent(username: String): List<DailyAttendanceMark> {
+        if (hasPrivateAcademicData() && username.equals(SessionManager.currentUser?.username, true)) {
+            return privateAttendanceItems.sortedByDescending { it.date }
+        }
         val normalizedUsername = username.trim().lowercase()
         return dailyAttendanceMarks
             .filter { it.studentUsername == normalizedUsername }
@@ -3030,6 +3041,11 @@ object SchoolRepository {
     }
 
     fun attendanceHistoryForStudent(username: String, className: String): List<DailyAttendanceMark> {
+        if (hasPrivateAcademicData() && username.equals(SessionManager.currentUser?.username, true)) {
+            return privateAttendanceItems
+                .filter { it.className.equals(className, true) }
+                .sortedByDescending { it.date }
+        }
         val normalizedUsername = username.trim().lowercase()
         val normalizedClass = normalizeClassName(className)
         return dailyAttendanceMarks
@@ -3133,13 +3149,81 @@ object SchoolRepository {
 
     private fun todayStamp(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
+    /** Refresh private academic data from Flask for the active school profile. */
+    fun refreshPrivateAcademicContent(onComplete: (Boolean) -> Unit = {}) {
+        val profileId = SessionManager.activeProfileId ?: return onComplete(false)
+        val user = SessionManager.currentUser ?: return onComplete(false)
+        val pending = AtomicInteger(if (user.role == Role.STUDENT) 4 else 2)
+        var success = true
+        fun finish(result: Boolean) {
+            success = success && result
+            if (pending.decrementAndGet() == 0) {
+                Handler(Looper.getMainLooper()).post {
+                    if (privateAcademicProfileId == profileId) notifyDataChanged()
+                    onComplete(success)
+                }
+            }
+        }
+        privateAcademicProfileId = profileId
+        MobileAcademicGateway.homework { result ->
+            result.onSuccess { rows ->
+                if (privateAcademicProfileId == profileId) {
+                    privateHomeworkItems = rows.map { row ->
+                        HomeworkItem(
+                            id = row.id, className = row.className, subject = row.subject,
+                            teacherUsername = if (user.role == Role.TEACHER) user.username else row.teacher, title = row.title,
+                            description = listOf(row.description, row.instructions.takeIf { it.isNotBlank() })
+                                .filterNotNull().joinToString("\n"), dueDate = row.dueDate,
+                            attachmentName = row.attachments.firstOrNull()?.name,
+                            attachmentNames = row.attachments.map { it.name },
+                            attachmentIds = row.attachments.map { it.id }
+                        )
+                    }
+                }
+            }
+            finish(result.isSuccess)
+        }
+        MobileAcademicGateway.tests { result ->
+            result.onSuccess { if (privateAcademicProfileId == profileId) privateTestItems = it }
+            finish(result.isSuccess)
+        }
+        if (user.role != Role.STUDENT) return
+        MobileAcademicGateway.marks { result ->
+            result.onSuccess { rows ->
+                if (privateAcademicProfileId == profileId) {
+                    privateMarksItems = rows.map { row ->
+                        MarkItem(user.username, user.fullName, row.subject, row.score, row.outOf, row.assessment)
+                    }
+                }
+            }
+            finish(result.isSuccess)
+        }
+        MobileAcademicGateway.attendance { result ->
+            result.onSuccess { rows ->
+                if (privateAcademicProfileId == profileId) {
+                    privateAttendanceItems = rows.map { row ->
+                        DailyAttendanceMark(user.username, row.className, row.date, row.present, row.subject)
+                    }
+                }
+            }
+            finish(result.isSuccess)
+        }
+    }
+
+    fun privateTestsForActiveProfile(): List<MobileAcademicGateway.Test> =
+        if (privateAcademicProfileId == SessionManager.activeProfileId) privateTestItems else emptyList()
+
+    private fun hasPrivateAcademicData(): Boolean = privateAcademicProfileId == SessionManager.activeProfileId
+
     fun homeworkFor(user: User): List<HomeworkItem> = when (user.role) {
-        Role.ADMIN -> homeworkItems.sortedBy { it.id }
-        Role.TEACHER -> homeworkItems.filter { it.teacherUsername == user.username }.sortedBy { it.id }
-        Role.STUDENT -> homeworkItems.filter { it.className == user.className }
+        Role.ADMIN, Role.TEACHER -> if (hasPrivateAcademicData()) privateHomeworkItems else homeworkItems.sortedBy { it.id }
+        Role.STUDENT -> if (hasPrivateAcademicData()) privateHomeworkItems else homeworkItems.filter { it.className == user.className }
     }
 
     fun homeworkForStudent(username: String): List<HomeworkItem> {
+        if (hasPrivateAcademicData() && username.equals(SessionManager.currentUser?.username, true)) {
+            return privateHomeworkItems.sortedBy { it.dueDate }
+        }
         val profile = profileFor(username) ?: return emptyList()
         return homeworkItems
             .filter { it.className == profile.className }
@@ -3329,7 +3413,7 @@ object SchoolRepository {
     fun marksFor(user: User): List<MarkItem> = when (user.role) {
         Role.ADMIN -> marksStore.toList()
         Role.TEACHER -> marksStore.toList()
-        Role.STUDENT -> marksStore.filter { it.studentUsername == user.username }
+        Role.STUDENT -> if (hasPrivateAcademicData()) privateMarksItems else marksStore.filter { it.studentUsername == user.username }
     }
 
     fun addMark(user: User, studentUsername: String, studentName: String, subject: String, score: Int, outOf: Int, assessment: String = "Class Test 1"): Boolean {
@@ -4343,7 +4427,9 @@ object SchoolRepository {
         }
     }
 
-    fun marksForStudent(username: String): List<MarkItem> = marksStore.filter { it.studentUsername == username }
+    fun marksForStudent(username: String): List<MarkItem> =
+        if (hasPrivateAcademicData() && username.equals(SessionManager.currentUser?.username, true)) privateMarksItems
+        else marksStore.filter { it.studentUsername == username }
 
     fun markForStudentAssessment(username: String, assessment: String): MarkItem? {
         val normalizedUsername = username.trim().lowercase()
@@ -4354,7 +4440,17 @@ object SchoolRepository {
         }
     }
 
-    fun attendanceForStudent(username: String): AttendanceRecord? = attendanceRecords.firstOrNull { it.studentUsername == username }
+    fun attendanceForStudent(username: String): AttendanceRecord? {
+        if (hasPrivateAcademicData() && username.equals(SessionManager.currentUser?.username, true)) {
+            val rows = privateAttendanceItems
+            if (rows.isEmpty()) return AttendanceRecord(username, SessionManager.currentUser?.fullName.orEmpty(), "", "", 0, 0)
+            return AttendanceRecord(
+                username, SessionManager.currentUser?.fullName.orEmpty(), rows.first().className, "",
+                rows.count { it.present }, rows.size
+            )
+        }
+        return attendanceRecords.firstOrNull { it.studentUsername == username }
+    }
 
     fun marksSummaryText(username: String): String {
         val marks = marksForStudent(username)

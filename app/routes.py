@@ -1112,6 +1112,44 @@ def list_mobile_tests():
         return jsonify(error=str(error)), 403
 
 
+@main.route("/api/mobile/marks/list", methods=["POST"])
+def list_mobile_marks():
+    """Return marks only for the Firebase-authorized selected student profile."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        profile = mobile_profile_from_payload(payload, "student")
+        rows = get_db().execute(
+            """SELECT m.id, m.exam_name, m.total_marks, m.obtained_marks, m.grade,
+                      s.name AS subject_name, m.class_id
+               FROM marks m JOIN subjects s ON s.id = m.subject_id
+               WHERE m.student_id = ? ORDER BY m.id DESC""",
+            (profile["id"],),
+        ).fetchall()
+        return jsonify(items=[dict(row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
+@main.route("/api/mobile/attendance/list", methods=["POST"])
+def list_mobile_attendance():
+    """Return attendance only for the Firebase-authorized selected student profile."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        profile = mobile_profile_from_payload(payload, "student")
+        rows = get_db().execute(
+            """SELECT a.id, a.attendance_date, a.status, s.name AS subject_name,
+                      c.name || ' - ' || c.section AS class_name
+               FROM attendance a
+               JOIN subjects s ON s.id = a.subject_id
+               JOIN classes c ON c.id = a.class_id
+               WHERE a.student_id = ? ORDER BY a.attendance_date DESC, a.id DESC""",
+            (profile["id"],),
+        ).fetchall()
+        return jsonify(items=[dict(row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
 @main.route("/api/mobile/attachments/<int:attachment_id>/download", methods=["POST"])
 def mobile_attachment_download(attachment_id):
     """Return a five-minute signed Cloudinary download only after server authorization."""

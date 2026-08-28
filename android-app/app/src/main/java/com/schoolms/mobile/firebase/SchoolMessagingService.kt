@@ -44,6 +44,9 @@ class SchoolMessagingService : FirebaseMessagingService() {
         if (allowed && title.isNotBlank() && body.isNotBlank()) {
             NotificationHelper.showRealtimeUpdate(this, title, body, destination)
         }
-        if (allowed) SchoolRepository.refreshSharedStateOnce { }
+        if (allowed) {
+            SchoolRepository.refreshSharedStateOnce { }
+            SchoolRepository.refreshPrivateAcademicContent { }
+        }
     }
 }

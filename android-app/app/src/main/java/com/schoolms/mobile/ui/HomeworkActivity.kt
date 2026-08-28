@@ -27,6 +27,7 @@ import com.google.firebase.ktx.Firebase
 import com.google.firebase.storage.ktx.storage
 import com.schoolms.mobile.R
 import com.schoolms.mobile.data.HomeworkItem
+import com.schoolms.mobile.data.MobileAcademicGateway
 import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
@@ -314,6 +315,10 @@ class HomeworkActivity : BaseActivity() {
     }
 
     private fun openTeacherHomeworkAttachments(item: HomeworkItem) {
+        if (item.attachmentIds.isNotEmpty()) {
+            openPrivateAttachmentList(item.attachmentNames, item.attachmentIds)
+            return
+        }
         val urls = item.attachmentUrls.ifEmpty { listOfNotNull(item.attachmentUrl) }
         if (urls.isEmpty()) {
             Toast.makeText(this, "No attachment saved for this homework", Toast.LENGTH_SHORT).show()
@@ -469,6 +474,32 @@ class HomeworkActivity : BaseActivity() {
         }
     }
 
+    private fun openPrivateAttachmentList(names: List<String>, attachmentIds: List<Int>) {
+        if (attachmentIds.isEmpty()) return
+        if (attachmentIds.size == 1) {
+            openPrivateAttachment(attachmentIds.first())
+            return
+        }
+        val labels = attachmentIds.mapIndexed { index, _ ->
+            names.getOrNull(index).orEmpty().ifBlank { "Attachment ${index + 1}" }
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Open teacher file")
+            .setItems(labels.toTypedArray()) { _, which -> openPrivateAttachment(attachmentIds[which]) }
+            .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun openPrivateAttachment(attachmentId: Int) {
+        Toast.makeText(this, "Preparing secure download…", Toast.LENGTH_SHORT).show()
+        MobileAcademicGateway.attachmentDownload(attachmentId) { result ->
+            runOnUiThread {
+                result.onSuccess { download -> openAttachment(download.url) }
+                    .onFailure { error -> Toast.makeText(this, error.message ?: "Unable to open attachment", Toast.LENGTH_LONG).show() }
+            }
+        }
+    }
+
     override fun onRepositoryChanged() {
         bindData()
     }
@@ -538,14 +569,18 @@ class HomeworkActivity : BaseActivity() {
             weightSum = 2f
         }
         val teacherAttachmentUrls = homework.attachmentUrls.ifEmpty { listOfNotNull(homework.attachmentUrl) }
+        val privateAttachmentIds = homework.attachmentIds
         val teacherAttachmentNames = homework.attachmentNames.ifEmpty { listOfNotNull(homework.attachmentName) }
         val openTeacherFilesButton = MaterialButton(this).apply {
-            text = if (teacherAttachmentUrls.size > 1) "Open teacher files" else "Open teacher file"
-            isEnabled = teacherAttachmentUrls.isNotEmpty()
+            text = if ((privateAttachmentIds.size.takeIf { it > 0 } ?: teacherAttachmentUrls.size) > 1) "Open teacher files" else "Open teacher file"
+            isEnabled = privateAttachmentIds.isNotEmpty() || teacherAttachmentUrls.isNotEmpty()
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
             setTextColor(ContextCompat.getColor(this@HomeworkActivity, android.R.color.white))
             backgroundTintList = ContextCompat.getColorStateList(this@HomeworkActivity, R.color.brand_primary)
-            setOnClickListener { openAttachmentList(teacherAttachmentNames, teacherAttachmentUrls) }
+            setOnClickListener {
+                if (privateAttachmentIds.isNotEmpty()) openPrivateAttachmentList(teacherAttachmentNames, privateAttachmentIds)
+                else openAttachmentList(teacherAttachmentNames, teacherAttachmentUrls)
+            }
         }
         val chooseButton = MaterialButton(this).apply {
             text = getString(R.string.choose_file)

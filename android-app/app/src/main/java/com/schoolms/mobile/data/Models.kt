@@ -135,6 +135,8 @@ data class HomeworkItem(
     var attachmentUrl: String? = null,
     val attachmentNames: List<String> = emptyList(),
     val attachmentUrls: List<String> = emptyList(),
+    // A private attachment gets a short-lived URL only after API authorization.
+    val attachmentIds: List<Int> = emptyList(),
     val submissions: List<HomeworkSubmission> = emptyList()
 )
 

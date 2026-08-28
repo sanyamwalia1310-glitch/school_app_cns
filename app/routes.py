@@ -1379,8 +1379,15 @@ def start_email_registration():
         already_verified = False
         if not created:
             # A shared email must prove ownership of its existing Firebase identity. If it has
-            # not been verified yet, Firebase's normal link is sent again.
-            owner_email, already_verified = firebase_identity_email(firebase_uid, str(payload.get("firebase_id_token", "")).strip())
+            # not been verified yet, Firebase's normal link is sent again. Do not make a
+            # new-email registration first wait for a Firebase sign-in that must fail.
+            firebase_id_token = str(payload.get("firebase_id_token", "")).strip()
+            if not firebase_id_token:
+                raise MobileOtpApiError(
+                    "This email already has a Firebase account. Confirm its password to link this school profile.",
+                    status_code=409,
+                )
+            owner_email, already_verified = firebase_identity_email(firebase_uid, firebase_id_token)
             if owner_email != email:
                 raise FirebaseAuthProvisioningError("The Firebase sign-in email does not match this registration.")
         token = secrets.token_urlsafe(32)
@@ -1393,7 +1400,10 @@ def start_email_registration():
         )
         db.commit()
         return jsonify(message="Verification email ready to send.", registration_token=token, email=email, verification_required=not already_verified)
-    except (MobileOtpApiError, FirebaseAuthProvisioningError) as error:
+    except MobileOtpApiError as error:
+        get_db().rollback()
+        return jsonify(error=str(error)), error.status_code
+    except FirebaseAuthProvisioningError as error:
         get_db().rollback()
         return jsonify(error=str(error)), 400
 

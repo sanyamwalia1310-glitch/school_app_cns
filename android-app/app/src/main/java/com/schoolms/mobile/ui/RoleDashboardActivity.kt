@@ -228,7 +228,9 @@ class RoleDashboardActivity : BaseActivity() {
     private fun bindTopAnnouncement(titleView: TextView, bodyView: TextView) {
         val latestAnnouncement = SchoolRepository.announcements().firstOrNull()
         titleView.text = latestAnnouncement?.title ?: "No announcement yet"
-        bodyView.text = latestAnnouncement?.subtitle ?: "New school announcements will appear here for students and teachers."
+        bodyView.text = "${latestAnnouncement?.subtitle ?: "New school announcements will appear here for students and teachers."} | Tap to open all updates."
+        bodyView.isSelected = false
+        bodyView.post { bodyView.isSelected = true }
     }
 
     private fun open(target: Class<*>) {

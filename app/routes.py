@@ -595,6 +595,34 @@ def linked_school_profiles(db, firebase_uid):
     ).fetchall()
 
 
+def repair_admin_firebase_profile(db, firebase_uid, firebase_id_token):
+    """Bind the sole unmapped active admin only after its Firebase admin claim is verified."""
+    if verified_firebase_admin_uid(firebase_id_token) != firebase_uid:
+        raise FirebaseAuthProvisioningError("Administrator authorization is required.")
+    existing = db.execute(
+        """SELECT * FROM users WHERE role = 'admin' AND activated = 1 AND firebase_uid = ?
+        ORDER BY id""",
+        (firebase_uid,),
+    ).fetchone()
+    if existing:
+        return existing
+    candidates = db.execute(
+        """SELECT * FROM users WHERE role = 'admin' AND activated = 1
+        AND (firebase_uid IS NULL OR TRIM(firebase_uid) = '') ORDER BY id"""
+    ).fetchall()
+    if len(candidates) != 1:
+        raise FirebaseAuthProvisioningError("This administrator Firebase identity is not linked to a school administrator profile.")
+    admin = candidates[0]
+    db.execute(
+        """UPDATE users SET firebase_uid = ?
+        WHERE id = ? AND (firebase_uid IS NULL OR TRIM(firebase_uid) = '')""",
+        (firebase_uid, admin["id"]),
+    )
+    db.commit()
+    current_app.logger.info("Repaired Firebase mapping for the existing administrator profile.")
+    return db.execute("SELECT * FROM users WHERE id = ?", (admin["id"],)).fetchone()
+
+
 def repair_missing_firebase_profile_links(db, firebase_uid, firebase_id_token):
     """Safely repair legacy profile links after Firebase proves identity ownership.
 
@@ -973,6 +1001,13 @@ def firebase_session_login():
         if not profiles:
             profiles = repair_missing_firebase_profile_links(db, uid, id_token)
         if not profiles:
+            try:
+                admin = repair_admin_firebase_profile(db, uid, id_token)
+            except FirebaseAuthProvisioningError:
+                admin = None
+            if admin:
+                profiles = [admin]
+        if not profiles:
             raise FirebaseAuthProvisioningError("No active school account is linked to this Firebase login.")
         return jsonify(message="Select the school profile to use.", profiles=[{"id": row["id"], "identifier": row["username"], "full_name": row["full_name"], "role": row["role"]} for row in profiles])
     except FirebaseAuthProvisioningError as error:
@@ -993,16 +1028,29 @@ def select_firebase_profile():
         user_id = int(payload.get("profile_id", 0))
         db = get_db()
         user = db.execute(
-            """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
-            WHERE l.firebase_uid = ? AND l.user_id = ? AND u.role IN ('student', 'teacher') AND u.activated = 1""",
-            (uid, user_id),
+            """SELECT u.* FROM users u LEFT JOIN firebase_profile_links l ON u.id = l.user_id
+            WHERE (l.firebase_uid = ? OR u.firebase_uid = ?) AND u.id = ?
+            AND u.role IN ('student', 'teacher', 'admin') AND u.activated = 1""",
+            (uid, uid, user_id),
         ).fetchone()
         if not user:
             repair_missing_firebase_profile_links(db, uid, str(payload.get("firebase_id_token", "")).strip())
             user = db.execute(
-                """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
-                WHERE l.firebase_uid = ? AND l.user_id = ? AND u.role IN ('student', 'teacher') AND u.activated = 1""",
-                (uid, user_id),
+                """SELECT u.* FROM users u LEFT JOIN firebase_profile_links l ON u.id = l.user_id
+                WHERE (l.firebase_uid = ? OR u.firebase_uid = ?) AND u.id = ?
+                AND u.role IN ('student', 'teacher', 'admin') AND u.activated = 1""",
+                (uid, uid, user_id),
+            ).fetchone()
+        if not user:
+            try:
+                repair_admin_firebase_profile(db, uid, str(payload.get("firebase_id_token", "")).strip())
+            except FirebaseAuthProvisioningError:
+                pass
+            user = db.execute(
+                """SELECT u.* FROM users u LEFT JOIN firebase_profile_links l ON u.id = l.user_id
+                WHERE (l.firebase_uid = ? OR u.firebase_uid = ?) AND u.id = ?
+                AND u.role IN ('student', 'teacher', 'admin') AND u.activated = 1""",
+                (uid, uid, user_id),
             ).fetchone()
         if not user:
             raise FirebaseAuthProvisioningError("This Firebase account is not linked to the selected school profile.")

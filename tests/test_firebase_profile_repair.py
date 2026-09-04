@@ -7,10 +7,42 @@ from unittest.mock import patch
 from app import create_app
 from app.database import close_db, get_db
 from app.firebase_auth import FirebaseAuthProvisioningError
-from app.routes import mobile_profile_from_payload, repair_missing_firebase_profile_links
+from app.routes import (
+    mobile_profile_from_payload,
+    repair_admin_firebase_profile,
+    repair_missing_firebase_profile_links,
+)
 
 
 class FirebaseProfileRepairTests(unittest.TestCase):
+    def test_verified_admin_claim_repairs_the_single_existing_admin_profile(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "FLASK_DATABASE": str(Path(temp_dir) / "admin-repair.db"),
+                    "FLASK_UPLOAD_FOLDER": str(Path(temp_dir) / "uploads"),
+                    "DATABASE_URL": "",
+                },
+                clear=False,
+            ):
+                app = create_app()
+                app.config.update(TESTING=True)
+                with app.app_context():
+                    db = get_db()
+                    admin_id = db.execute(
+                        "SELECT id FROM users WHERE role = 'admin' AND activated = 1 ORDER BY id LIMIT 1"
+                    ).fetchone()["id"]
+                    db.commit()
+                    with patch("app.routes.verified_firebase_admin_uid", return_value="admin-firebase-uid"):
+                        admin = repair_admin_firebase_profile(db, "admin-firebase-uid", "verified-token")
+                    self.assertEqual(admin["id"], admin_id)
+                    self.assertEqual(
+                        db.execute("SELECT firebase_uid FROM users WHERE id = ?", (admin_id,)).fetchone()["firebase_uid"],
+                        "admin-firebase-uid",
+                    )
+                    close_db()
+
     def test_verified_shared_parent_repairs_only_matching_profiles(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(

@@ -585,6 +585,86 @@ def student_can_access_homework(db, student_id, homework_id):
     return row is not None
 
 
+def linked_school_profiles(db, firebase_uid):
+    """Return active school profiles linked to one verified Firebase identity."""
+    return db.execute(
+        """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
+        WHERE l.firebase_uid = ? AND u.role IN ('student', 'teacher') AND u.activated = 1
+        ORDER BY u.role, u.username""",
+        (firebase_uid,),
+    ).fetchall()
+
+
+def repair_missing_firebase_profile_links(db, firebase_uid, firebase_id_token):
+    """Safely repair legacy profile links after Firebase proves identity ownership.
+
+    The profile-link table is authoritative because one verified parent Firebase
+    identity can be linked to several student profiles. A legacy row is repaired
+    only when the authenticated Firebase email exactly matches a stored school
+    email, a student master-record email, or the old deterministic school-ID
+    Firebase address. No relationship is guessed from client input.
+    """
+    firebase_email, _email_verified = firebase_identity_email(firebase_uid, firebase_id_token)
+    firebase_email = firebase_email.strip().lower()
+    if not firebase_email:
+        return []
+
+    legacy_domain = current_app.config["FIREBASE_AUTH_EMAIL_DOMAIN"].strip().lower()
+    legacy_suffix = f"@{legacy_domain}" if legacy_domain else ""
+    legacy_username = (
+        firebase_email[: -len(legacy_suffix)]
+        if legacy_suffix and firebase_email.endswith(legacy_suffix)
+        else ""
+    )
+    candidates = db.execute(
+        """SELECT DISTINCT u.id, u.firebase_uid
+        FROM users u
+        LEFT JOIN student_master_records sm ON sm.login_user_id = u.id
+        WHERE u.role IN ('student', 'teacher') AND u.activated = 1
+          AND (u.firebase_uid IS NULL OR u.firebase_uid = ?)
+          AND NOT EXISTS (
+              SELECT 1 FROM firebase_profile_links existing
+              WHERE existing.user_id = u.id AND existing.firebase_uid <> ?
+          )
+          AND (
+              u.firebase_uid = ?
+              OR LOWER(TRIM(COALESCE(u.email, ''))) = ?
+              OR LOWER(TRIM(COALESCE(sm.email, ''))) = ?
+              OR (? = 1 AND LOWER(TRIM(u.username)) = ?)
+          )""",
+        (
+            firebase_uid,
+            firebase_uid,
+            firebase_uid,
+            firebase_email,
+            firebase_email,
+            1 if legacy_username else 0,
+            legacy_username,
+        ),
+    ).fetchall()
+    for candidate in candidates:
+        # Never replace an existing link to another Firebase UID.
+        db.execute(
+            """INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)
+            ON CONFLICT DO NOTHING""",
+            (firebase_uid, candidate["id"]),
+        )
+
+    profiles = linked_school_profiles(db, firebase_uid)
+    # users.firebase_uid is a legacy unique field, so update it only when one
+    # school profile is linked. Shared parents are represented by link rows.
+    if len(profiles) == 1:
+        db.execute(
+            """UPDATE users SET firebase_uid = ?
+            WHERE id = ? AND (firebase_uid IS NULL OR firebase_uid = ?)""",
+            (firebase_uid, profiles[0]["id"], firebase_uid),
+        )
+    if candidates:
+        db.commit()
+        current_app.logger.info("Repaired Firebase profile links for %s active school profile(s).", len(candidates))
+    return profiles
+
+
 def mobile_profile_from_payload(payload, *allowed_roles):
     """Resolve the exact profile selected by a Firebase-authenticated mobile user.
 
@@ -595,13 +675,25 @@ def mobile_profile_from_payload(payload, *allowed_roles):
     profile_id = int(payload.get("profile_id", 0))
     roles = allowed_roles or ("student", "teacher", "admin")
     placeholders = ",".join("?" for _ in roles)
-    row = get_db().execute(
+    db = get_db()
+    row = db.execute(
         f"""SELECT u.* FROM users u
             LEFT JOIN firebase_profile_links l ON l.user_id = u.id
             WHERE (l.firebase_uid = ? OR u.firebase_uid = ?)
               AND u.id = ? AND u.activated = 1 AND u.role IN ({placeholders})""",
         (uid, uid, profile_id, *roles),
     ).fetchone()
+    if not row:
+        # Repair only after Firebase authenticated this UID, then repeat the
+        # exact selected-profile authorization check.
+        repair_missing_firebase_profile_links(db, uid, str(payload.get("firebase_id_token", "")).strip())
+        row = db.execute(
+            f"""SELECT u.* FROM users u
+                LEFT JOIN firebase_profile_links l ON l.user_id = u.id
+                WHERE (l.firebase_uid = ? OR u.firebase_uid = ?)
+                  AND u.id = ? AND u.activated = 1 AND u.role IN ({placeholders})""",
+            (uid, uid, profile_id, *roles),
+        ).fetchone()
     if not row:
         raise FirebaseAuthProvisioningError("This Firebase login is not authorized for the selected school profile.")
     return row
@@ -877,41 +969,9 @@ def firebase_session_login():
         id_token = str(payload.get("firebase_id_token", "")).strip()
         uid = verified_firebase_uid(id_token)
         db = get_db()
-        profiles = db.execute(
-            """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
-            WHERE l.firebase_uid = ? AND u.role IN ('student', 'teacher') AND u.activated = 1
-            ORDER BY u.role, u.username""",
-            (uid,),
-        ).fetchall()
-        # Legacy Android accounts used the deterministic Firebase address
-        # <school-id>@cns-paunta.app before profile links existed on Flask.
-        # Repair only this provable mapping: the authenticated Firebase email must
-        # exactly equal the requested activated school record's legacy address.
-        # Real-email and shared-parent accounts are never guessed or auto-linked.
-        legacy_school_id = str(payload.get("legacy_school_id", "")).strip()
-        if not profiles and legacy_school_id:
-            legacy_user = db.execute(
-                """SELECT id, username FROM users WHERE LOWER(username) = LOWER(?)
-                AND role IN ('student', 'teacher') AND activated = 1 LIMIT 1""",
-                (legacy_school_id,),
-            ).fetchone()
-            if legacy_user:
-                firebase_email, _ = firebase_identity_email(uid, id_token)
-                domain = current_app.config["FIREBASE_AUTH_EMAIL_DOMAIN"].strip().lower()
-                expected_email = f"{legacy_user['username'].strip().lower()}@{domain}"
-                if domain and firebase_email == expected_email:
-                    db.execute(
-                        """INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)
-                        ON CONFLICT(firebase_uid, user_id) DO NOTHING""",
-                        (uid, legacy_user["id"]),
-                    )
-                    db.commit()
-                    profiles = db.execute(
-                        """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
-                        WHERE l.firebase_uid = ? AND u.role IN ('student', 'teacher') AND u.activated = 1
-                        ORDER BY u.role, u.username""",
-                        (uid,),
-                    ).fetchall()
+        profiles = linked_school_profiles(db, uid)
+        if not profiles:
+            profiles = repair_missing_firebase_profile_links(db, uid, id_token)
         if not profiles:
             raise FirebaseAuthProvisioningError("No active school account is linked to this Firebase login.")
         return jsonify(message="Select the school profile to use.", profiles=[{"id": row["id"], "identifier": row["username"], "full_name": row["full_name"], "role": row["role"]} for row in profiles])
@@ -931,11 +991,19 @@ def select_firebase_profile():
     try:
         uid = verified_firebase_uid(str(payload.get("firebase_id_token", "")).strip())
         user_id = int(payload.get("profile_id", 0))
-        user = get_db().execute(
+        db = get_db()
+        user = db.execute(
             """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
             WHERE l.firebase_uid = ? AND l.user_id = ? AND u.role IN ('student', 'teacher') AND u.activated = 1""",
             (uid, user_id),
         ).fetchone()
+        if not user:
+            repair_missing_firebase_profile_links(db, uid, str(payload.get("firebase_id_token", "")).strip())
+            user = db.execute(
+                """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
+                WHERE l.firebase_uid = ? AND l.user_id = ? AND u.role IN ('student', 'teacher') AND u.activated = 1""",
+                (uid, user_id),
+            ).fetchone()
         if not user:
             raise FirebaseAuthProvisioningError("This Firebase account is not linked to the selected school profile.")
         establish_firebase_profile_session(user)
@@ -959,15 +1027,22 @@ def register_mobile_fcm_token():
         token = str(payload.get("token", "")).strip()
         if not token or len(token) > 4096:
             raise ValueError("Invalid FCM device token.")
-        profile = get_db().execute(
+        db = get_db()
+        profile = db.execute(
             """SELECT u.id FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
             WHERE l.firebase_uid = ? AND l.user_id = ? AND u.activated = 1""",
             (uid, profile_id),
         ).fetchone()
         if not profile:
+            repair_missing_firebase_profile_links(db, uid, str(payload.get("firebase_id_token", "")).strip())
+            profile = db.execute(
+                """SELECT u.id FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
+                WHERE l.firebase_uid = ? AND l.user_id = ? AND u.activated = 1""",
+                (uid, profile_id),
+            ).fetchone()
+        if not profile:
             raise FirebaseAuthProvisioningError("This Firebase login is not authorized for the selected school profile.")
         now = time.time()
-        db = get_db()
         db.execute(
             """INSERT INTO fcm_device_tokens (token, firebase_uid, user_id, platform, created_at, updated_at)
             VALUES (?, ?, ?, 'android', ?, ?)

@@ -230,6 +230,15 @@ def migrate_postgres(db) -> None:
         db.execute(statement)
     for statement in POSTGRES_INDEXES:
         db.execute(statement)
+    # Preserve every safe legacy one-to-one Firebase UID mapping. Shared-parent
+    # identities are represented by firebase_profile_links and can be repaired
+    # after the Firebase token proves ownership at sign-in time.
+    db.execute(
+        """INSERT INTO firebase_profile_links (firebase_uid, user_id)
+        SELECT firebase_uid, id FROM users
+        WHERE firebase_uid IS NOT NULL AND TRIM(firebase_uid) <> ''
+        ON CONFLICT DO NOTHING"""
+    )
     db.execute(
         "INSERT INTO schema_migrations (migration_key) VALUES (?) "
         "ON CONFLICT (migration_key) DO NOTHING",

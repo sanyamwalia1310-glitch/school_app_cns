@@ -114,7 +114,7 @@ class ClassRecordsActivity : BaseActivity() {
         className = intent.getStringExtra(EXTRA_CLASS_NAME).orEmpty()
         mode = intent.getStringExtra(EXTRA_MODE).orEmpty()
         val canOpenClass = when (mode) {
-            MODE_ATTENDANCE -> (user.role == Role.ADMIN || user.role == Role.TEACHER) && className.isNotBlank()
+            MODE_ATTENDANCE -> SchoolRepository.canMarkAttendanceForClass(user, className)
             MODE_PROFILES, MODE_MARKS, MODE_HOMEWORK -> user.role == Role.ADMIN || user.role == Role.TEACHER
             else -> SchoolRepository.canAccessClass(user, className)
         }
@@ -143,7 +143,7 @@ class ClassRecordsActivity : BaseActivity() {
         val createMarkSection = findViewById<View>(R.id.createMarkSection)
         val toggleHomeworkComposerButton = findViewById<MaterialButton>(R.id.toggleHomeworkComposerButton)
 
-        if (mode == MODE_HOMEWORK && (user.role == Role.ADMIN || user.role == Role.TEACHER) && className.isNotBlank()) {
+        if (mode == MODE_HOMEWORK && (user.role == Role.ADMIN || user.role == Role.TEACHER) && SchoolRepository.classExists(className)) {
             toggleHomeworkComposerButton.visibility = View.VISIBLE
             toggleHomeworkComposerButton.setOnClickListener {
                 setHomeworkComposerVisible(!homeworkComposerOpen)
@@ -163,7 +163,7 @@ class ClassRecordsActivity : BaseActivity() {
             }
         }
 
-        if (mode == MODE_MARKS && (user.role == Role.ADMIN || user.role == Role.TEACHER) && className.isNotBlank()) {
+        if (mode == MODE_MARKS && (user.role == Role.ADMIN || user.role == Role.TEACHER) && SchoolRepository.classExists(className)) {
             createMarkSection.visibility = View.GONE
         }
 
@@ -252,30 +252,6 @@ class ClassRecordsActivity : BaseActivity() {
             }
         }
 
-        // The marks/student selection must use the same source as the class
-        // picker.  This also prevents a stale local cache from selecting a
-        // student outside the server-authorized class.
-        if (mode == MODE_MARKS) {
-            MobileAcademicGateway.staffClassStudents(className) { result ->
-                runOnUiThread {
-                    result.onSuccess { students ->
-                        classStudents = students.map {
-                            com.schoolms.mobile.data.StudentProfile(
-                                username = it.username,
-                                fullName = it.fullName,
-                                className = className,
-                                rollNumber = it.rollNumber,
-                                guardianContact = "",
-                                notes = ""
-                            )
-                        }
-                        studentLabels = classStudents.map { "${it.fullName} (${it.username})" }
-                        markStudentInput?.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, studentLabels))
-                        bind()
-                    }
-                }
-            }
-        }
     }
 
     private fun bind() {
@@ -297,20 +273,12 @@ class ClassRecordsActivity : BaseActivity() {
                 }
             }
             MODE_MARKS -> {
-                val students = classStudents.filter {
-                    it.fullName.contains(query, true) || it.username.contains(query, true) || it.rollNumber.contains(query, true)
-                }
-                val rows = students.map {
-                    SimpleListItem(it.fullName, "Roll: ${it.rollNumber.ifBlank { "--" }}\nTap to add or update grades", it.username)
-                }
-                recyclerView.adapter = SimpleListAdapter(rows) { position ->
-                    val student = students.getOrNull(position) ?: return@SimpleListAdapter
+                val rows = SchoolRepository.marksRowsWithUsernamesForClass(className, query)
+                recyclerView.adapter = SimpleListAdapter(rows.map { it.second }) { position ->
                     startActivity(
                         Intent(this, GradeEntryActivity::class.java)
-                            .putExtra(GradeEntryActivity.EXTRA_USERNAME, student.username)
+                            .putExtra(GradeEntryActivity.EXTRA_USERNAME, rows[position].first)
                             .putExtra(GradeEntryActivity.EXTRA_CLASS_NAME, className)
-                            .putExtra(GradeEntryActivity.EXTRA_FULL_NAME, student.fullName)
-                            .putExtra(GradeEntryActivity.EXTRA_ROLL_NUMBER, student.rollNumber)
                     )
                 }
             }

@@ -44,11 +44,6 @@ object MobileAcademicGateway {
     data class Download(val url: String, val filename: String)
     data class Upload(val mediaId: Int, val filename: String)
     data class StaffSubject(val name: String)
-    data class StaffClass(val id: Int, val name: String)
-    data class StaffStudent(val username: String, val fullName: String, val rollNumber: String)
-    private data class CachedStaffClasses(val profileId: Int, val savedAt: Long, val items: List<StaffClass>)
-    private val classCacheLock = Any()
-    private var staffClassCache: CachedStaffClasses? = null
 
     fun homework(callback: (Result<List<Homework>>) -> Unit) = authenticated("/api/mobile/homework/list", callback) { payload ->
         payload.items().map { item ->
@@ -137,38 +132,6 @@ object MobileAcademicGateway {
             payload.items().map {
                 StaffSubject(it.string("name"))
             }.filter { it.name.isNotBlank() }
-        }
-
-    /** The school server, not an older local cache, owns staff class assignments. */
-    fun staffClasses(callback: (Result<List<StaffClass>>) -> Unit) {
-        val profileId = SessionManager.activeProfileId ?: -1
-        val now = System.currentTimeMillis()
-        synchronized(classCacheLock) {
-            staffClassCache?.takeIf { it.profileId == profileId && now - it.savedAt < 60_000L }?.let {
-                callback(Result.success(it.items))
-                return
-            }
-        }
-        authenticated("/api/mobile/staff/classes", { result ->
-            result.onSuccess { items ->
-                synchronized(classCacheLock) {
-                    staffClassCache = CachedStaffClasses(profileId, System.currentTimeMillis(), items)
-                }
-            }
-            callback(result)
-        }) { payload ->
-            payload.items().map {
-                StaffClass(it.int("id"), it.string("class_name"))
-            }.filter { it.id > 0 && it.name.isNotBlank() }
-        }
-    }
-
-    /** Enrolled students are returned only after Flask verifies staff/class access. */
-    fun staffClassStudents(className: String, callback: (Result<List<StaffStudent>>) -> Unit) =
-        authenticated("/api/mobile/staff/class-students", callback, mapOf("class_name" to className)) { payload ->
-            payload.items().map {
-                StaffStudent(it.string("username"), it.string("full_name"), it.string("roll_no"))
-            }.filter { it.username.isNotBlank() }
         }
 
     fun saveMark(

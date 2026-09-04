@@ -1,6 +1,5 @@
 import hashlib
 import os
-import re
 import secrets
 import sqlite3
 import time
@@ -532,27 +531,19 @@ def student_in_class(db, student_id, class_id):
 
 
 def mobile_class_by_name(db, class_name):
-    """Resolve a server class display name without guessing an ambiguous section."""
+    """Resolve Android's display name (for example, ``Grade 8 - A``) safely."""
     value = str(class_name or "").strip()
     if not value:
         raise ValueError("Choose a class.")
-
-    def normalize(value):
-        # Older Android builds used "Class 10" while the server stores
-        # "Grade 10".  Treat those prefixes as presentation only, but retain
-        # the section so "10-A" can never silently become "10-B".
-        value = re.sub(r"\b(?:class|grade|standard)\s*", "", str(value or ""), flags=re.I)
-        return " ".join(value.lower().split())
-
-    normalized = normalize(value)
+    normalized = " ".join(value.lower().replace("class ", "").split())
     matches = []
     for row in db.execute("SELECT id, name, section FROM classes ORDER BY id").fetchall():
-        name = normalize(row["name"])
+        name = " ".join(str(row["name"] or "").lower().replace("class ", "").split())
         section = " ".join(str(row["section"] or "").lower().split())
         if normalized in {name, f"{name} - {section}".strip(" -")}:
             matches.append(row)
     if len(matches) != 1:
-        raise ValueError("Choose the exact class and section configured on the school server.")
+        raise ValueError("The selected class is not configured on the school server.")
     return matches[0]
 
 
@@ -1385,47 +1376,6 @@ def mobile_staff_subjects():
         rows = db.execute(
             """SELECT s.id, s.name FROM class_subjects cs JOIN subjects s ON s.id = cs.subject_id
             WHERE cs.class_id = ? ORDER BY s.name""",
-            (school_class["id"],),
-        ).fetchall()
-        return jsonify(items=[dict(row) for row in rows])
-    except (ValueError, FirebaseAuthProvisioningError) as error:
-        return jsonify(error=str(error)), 403
-
-
-@main.route("/api/mobile/staff/classes", methods=["POST"])
-def mobile_staff_classes():
-    """Return the exact server-owned class labels a staff profile may manage."""
-    payload = request.get_json(silent=True) or {}
-    try:
-        actor = mobile_profile_from_payload(payload, "admin", "teacher")
-        db = get_db()
-        query = "SELECT id, name || CASE WHEN TRIM(COALESCE(section, '')) = '' THEN '' ELSE ' - ' || section END AS class_name FROM classes"
-        params = ()
-        if actor["role"] == "teacher":
-            query += " WHERE teacher_id = ?"
-            params = (actor["id"],)
-        query += " ORDER BY name, section"
-        return jsonify(items=[dict(row) for row in db.execute(query, params).fetchall()])
-    except (ValueError, FirebaseAuthProvisioningError) as error:
-        return jsonify(error=str(error)), 403
-
-
-@main.route("/api/mobile/staff/class-students", methods=["POST"])
-def mobile_staff_class_students():
-    """Return enrolled students only after the staff member is authorized for the class."""
-    payload = request.get_json(silent=True) or {}
-    try:
-        actor = mobile_profile_from_payload(payload, "admin", "teacher")
-        db = get_db()
-        school_class = mobile_class_by_name(db, payload.get("class_name"))
-        require_mobile_staff_class_access(db, actor, school_class["id"])
-        rows = db.execute(
-            """SELECT u.username, u.full_name, COALESCE(sp.roll_no, '') AS roll_no
-            FROM users u
-            JOIN enrollments e ON e.student_id = u.id
-            LEFT JOIN student_profiles sp ON sp.user_id = u.id
-            WHERE e.class_id = ? AND u.role = 'student' AND u.activated = 1
-            ORDER BY sp.roll_no, u.full_name, u.username""",
             (school_class["id"],),
         ).fetchall()
         return jsonify(items=[dict(row) for row in rows])

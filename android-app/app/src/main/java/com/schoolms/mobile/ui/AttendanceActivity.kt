@@ -128,6 +128,11 @@ class AttendanceActivity : BaseActivity() {
 
         if (isStaff) {
             refreshClassOptions(user)
+            if (selectedClass.isBlank()) {
+                showClassCards(user)
+            } else {
+                refreshAttendanceEntries()
+            }
         } else {
             classFilterLayout.visibility = View.GONE
             searchLayout.visibility = View.GONE
@@ -140,22 +145,16 @@ class AttendanceActivity : BaseActivity() {
     }
 
     private fun refreshClassOptions(user: com.schoolms.mobile.data.User) {
-        MobileAcademicGateway.staffClasses { result ->
-            runOnUiThread {
-                result.onSuccess { serverClasses ->
-                    staffClasses = serverClasses.map { it.name }
-                    classAdapter.clear()
-                    classAdapter.addAll(staffClasses)
-                    classAdapter.notifyDataSetChanged()
-                    if (selectedClass.isBlank()) showClassCards(user) else {
-                        classFilterInput.setText(selectedClass, false)
-                        refreshAttendanceEntries()
-                    }
-                }.onFailure { error ->
-                    summaryText.text = error.message ?: "School classes could not be loaded."
-                    attendanceRecycler.adapter = SimpleListAdapter(emptyList())
-                }
-            }
+        val classes = when (user.role) {
+            Role.TEACHER -> SchoolRepository.assignedClasses(user)
+            else -> SchoolRepository.availableClasses()
+        }
+        staffClasses = classes
+        classAdapter.clear()
+        classAdapter.addAll(classes)
+        classAdapter.notifyDataSetChanged()
+        if (selectedClass.isNotBlank()) {
+            classFilterInput.setText(selectedClass, false)
         }
     }
 
@@ -167,14 +166,21 @@ class AttendanceActivity : BaseActivity() {
         editButton.visibility = View.GONE
         backToClassesButton.visibility = View.GONE
 
-        val rows = staffClasses.map { className ->
+        val classes = when (user.role) {
+            Role.TEACHER -> SchoolRepository.assignedClasses(user)
+            else -> SchoolRepository.availableClasses()
+        }
+        staffClasses = classes
+        val rows = classes.map { className ->
+            val studentCount = SchoolRepository.studentsForClass(className).size
+            val teacherName = SchoolRepository.teacherNameForClass(className)
             SimpleListItem(
                 title = className,
-                subtitle = "Server-configured class. Open to load enrolled students.",
+                subtitle = "$studentCount students\nHead: $teacherName",
                 badge = "Open"
             )
         }
-        summaryText.text = if (staffClasses.isEmpty()) {
+        summaryText.text = if (classes.isEmpty()) {
             "No class assigned for attendance."
         } else if (user.role == Role.TEACHER) {
             "Choose your assigned class to mark attendance."
@@ -202,32 +208,7 @@ class AttendanceActivity : BaseActivity() {
         historyButton.visibility = View.VISIBLE
         editButton.visibility = View.VISIBLE
         backToClassesButton.visibility = View.VISIBLE
-        summaryText.text = "$selectedClass - Loading enrolled students…"
-        MobileAcademicGateway.staffClassStudents(selectedClass) { result ->
-            runOnUiThread {
-                result.onSuccess { students ->
-                    classStudents = students.map {
-                        StudentProfile(
-                            username = it.username,
-                            fullName = it.fullName,
-                            className = selectedClass,
-                            rollNumber = it.rollNumber,
-                            guardianContact = "",
-                            notes = ""
-                        )
-                    }
-                    renderAttendanceEntries()
-                }.onFailure { error ->
-                    currentEntries = emptyList()
-                    attendanceMarkAdapter.update(emptyList())
-                    saveButton.isEnabled = false
-                    summaryText.text = error.message ?: "Enrolled students could not be loaded."
-                }
-            }
-        }
-    }
-
-    private fun renderAttendanceEntries() {
+        classStudents = SchoolRepository.studentsForClass(selectedClass)
         filteredStudents = classStudents.filter {
             it.fullName.contains(query, true) ||
                 it.username.contains(query, true) ||

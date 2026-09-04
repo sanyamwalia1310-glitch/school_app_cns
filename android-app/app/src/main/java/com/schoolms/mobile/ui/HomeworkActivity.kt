@@ -171,32 +171,15 @@ class HomeworkActivity : BaseActivity() {
         }
 
         if (user.role == Role.ADMIN) {
-            // Do not reopen legacy locally cached classes (for example
-            // "Class 1") that no longer exist in the server database.
-            MobileAcademicGateway.staffClasses { result ->
-                runOnUiThread {
-                    result.onSuccess { serverClasses ->
-                        val rows = serverClasses.map {
-                            SimpleListItem(it.name, "Server-configured class", "Open")
-                        }.filter {
-                            it.title.contains(query, true) || it.subtitle.contains(query, true)
-                        }
-                        findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(rows) { position ->
-                            val className = rows.getOrNull(position)?.title.orEmpty()
-                            if (className.isNotBlank()) {
-                                startActivity(
-                                    Intent(this, ClassRecordsActivity::class.java)
-                                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
-                                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, className)
-                                )
-                            }
-                        }
-                    }.onFailure { error ->
-                        findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(
-                            listOf(SimpleListItem("Classes unavailable", error.message ?: "Could not load school classes", "Retry"))
-                        )
-                    }
-                }
+            val rows = SchoolRepository.allClassOverviewRows().filter {
+                it.title.contains(query, true) || it.subtitle.contains(query, true)
+            }
+            findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(rows) { position ->
+                startActivity(
+                    Intent(this, ClassRecordsActivity::class.java)
+                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
+                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, rows[position].title)
+                )
             }
             return
         }
@@ -345,31 +328,23 @@ class HomeworkActivity : BaseActivity() {
     }
 
     private fun showAddHomeworkClassPicker() {
-        MobileAcademicGateway.staffClasses { result ->
-            runOnUiThread {
-                result.onSuccess { serverClasses ->
-                    val classes = serverClasses.map { it.name }
-                    if (classes.isEmpty()) {
-                        Toast.makeText(this, "No server class is assigned to this account", Toast.LENGTH_LONG).show()
-                        return@onSuccess
-                    }
-                    AlertDialog.Builder(this)
-                        .setTitle("Add homework for class")
-                        .setItems(classes.toTypedArray()) { _, which ->
-                            startActivity(
-                                Intent(this, ClassRecordsActivity::class.java)
-                                    .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
-                                    .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, classes[which])
-                                    .putExtra(ClassRecordsActivity.EXTRA_OPEN_HOMEWORK_COMPOSER, true)
-                            )
-                        }
-                        .setNegativeButton("Cancel", null)
-                        .show()
-                }.onFailure { error ->
-                    Toast.makeText(this, error.message ?: "Server classes could not be loaded", Toast.LENGTH_LONG).show()
-                }
-            }
+        val classes = SchoolRepository.availableClasses()
+        if (classes.isEmpty()) {
+            Toast.makeText(this, "No classes available", Toast.LENGTH_SHORT).show()
+            return
         }
+        AlertDialog.Builder(this)
+            .setTitle("Add homework for class")
+            .setItems(classes.toTypedArray()) { _, which ->
+                startActivity(
+                    Intent(this, ClassRecordsActivity::class.java)
+                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
+                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, classes[which])
+                        .putExtra(ClassRecordsActivity.EXTRA_OPEN_HOMEWORK_COMPOSER, true)
+                )
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun showTeacherHomeworkActions(item: HomeworkItem) {

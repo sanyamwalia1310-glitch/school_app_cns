@@ -12,7 +12,6 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.textfield.TextInputEditText
 import com.schoolms.mobile.R
-import com.schoolms.mobile.data.MobileAcademicGateway
 import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
@@ -86,25 +85,17 @@ class MarksActivity : BaseActivity() {
     }
 
     private fun bindStaffClasses(user: com.schoolms.mobile.data.User) {
-        MobileAcademicGateway.staffClasses { result ->
-            runOnUiThread {
-                result.onSuccess { classes ->
-                    val rows = classes.map { SimpleListItem(it.name, "Server-configured class", "Open") }.filter {
-                        it.title.contains(query, true) || it.subtitle.contains(query, true)
-                    }
-                    recyclerView.adapter = SimpleListAdapter(rows) { position ->
-                        val className = rows.getOrNull(position)?.title.orEmpty()
-                        if (className.isNotBlank()) {
-                            startActivity(
-                                Intent(this, ClassRecordsActivity::class.java)
-                                    .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_MARKS)
-                                    .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, className)
-                            )
-                        }
-                    }
-                }.onFailure { error ->
-                    recyclerView.adapter = SimpleListAdapter(listOf(SimpleListItem("Classes unavailable", error.message ?: "Could not load school classes", "Retry")))
-                }
+        val rows = SchoolRepository.classItems(user).filter {
+            it.title.contains(query, true) || it.subtitle.contains(query, true) || it.badge.orEmpty().contains(query, true)
+        }
+        recyclerView.adapter = SimpleListAdapter(rows) { position ->
+            val className = rows.getOrNull(position)?.title.orEmpty()
+            if (className.isNotBlank()) {
+                startActivity(
+                    Intent(this, ClassRecordsActivity::class.java)
+                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_MARKS)
+                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, className)
+                )
             }
         }
     }

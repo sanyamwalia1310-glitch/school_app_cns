@@ -200,7 +200,8 @@ class GradeEntryActivity : BaseActivity() {
     }
 
     private fun applySubjects(names: List<String>) {
-        val subjects = names.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
+        val subjects = names.flatMap { SchoolRepository.subjectDisplayNames(it) }
+            .distinctBy { it.lowercase() }
         if (subjectAdapter.count != subjects.size || (0 until subjectAdapter.count).any { subjectAdapter.getItem(it) != subjects[it] }) {
             subjectAdapter.clear()
             subjectAdapter.addAll(subjects)

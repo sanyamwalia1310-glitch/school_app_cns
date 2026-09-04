@@ -2837,17 +2837,35 @@ object SchoolRepository {
 
     fun subjectItems(): List<SubjectItem> = subjectItems.sortedWith(compareBy({ classOrder(it.className) }, { it.name }))
 
+    /** Turns legacy spellings and combined subject strings into one clean list. */
+    fun subjectDisplayNames(raw: String): List<String> {
+        val text = raw.trim()
+        if (text.isBlank()) return emptyList()
+        val known = Regex("(?i)social\\s+science|mathematics|sanskrit|english|hindi|science|math|evs|s\\.?st|sst|skt")
+        val matches = known.findAll(text).map { it.value }.toList()
+        val values = if (matches.size >= 2) matches else text.split(',', ';', '/').map { it.trim() }
+        return values.mapNotNull { value ->
+            when (value.trim().lowercase().replace(".", "")) {
+                "math", "mathematics" -> "Mathematics"
+                "sst", "social science" -> "Social Science"
+                "skt", "sanskrit" -> "Sanskrit"
+                "evs" -> "EVS"
+                "english" -> "English"
+                "hindi" -> "Hindi"
+                "science" -> "Science"
+                else -> value.trim().takeIf { it.isNotBlank() }
+            }
+        }.distinctBy { it.lowercase() }
+    }
+
     fun subjectsForClass(className: String): List<SubjectItem> {
         val assigned = subjectItems
             .filter { it.className == className }
             .flatMap { item ->
-                item.name.split(',', ';', '/').map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .map { item.copy(name = it) }
+                subjectDisplayNames(item.name).map { item.copy(name = it) }
             }
         val allSchoolSubjects = subjectItems.flatMap { item ->
-            item.name.split(',', ';', '/').map { it.trim() }
-                .filter { it.isNotBlank() }
+            subjectDisplayNames(item.name)
                 .map { SubjectItem(it, normalizeClassName(className), item.teacherName) }
         }
         val standardSubjects = listOf("English", "Hindi", "Mathematics", "Science", "Social Science", "EVS", "S.st", "Sanskrit")

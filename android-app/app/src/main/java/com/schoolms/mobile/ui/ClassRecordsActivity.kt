@@ -241,7 +241,7 @@ class ClassRecordsActivity : BaseActivity() {
         MobileAcademicGateway.staffSubjects(className) { result ->
             runOnUiThread {
                 result.onSuccess { serverSubjects ->
-                    val merged = (subjectNames + serverSubjects.map { it.name }
+                    val merged = (subjectNames + serverSubjects.flatMap { SchoolRepository.subjectDisplayNames(it.name) }
                         .filterNot { it.equals("Daily Attendance", true) })
                         .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
                     if (merged == subjectNames) return@onSuccess

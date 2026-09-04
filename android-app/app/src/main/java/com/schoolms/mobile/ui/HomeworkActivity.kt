@@ -171,15 +171,32 @@ class HomeworkActivity : BaseActivity() {
         }
 
         if (user.role == Role.ADMIN) {
-            val rows = SchoolRepository.allClassOverviewRows().filter {
-                it.title.contains(query, true) || it.subtitle.contains(query, true)
-            }
-            findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(rows) { position ->
-                startActivity(
-                    Intent(this, ClassRecordsActivity::class.java)
-                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
-                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, rows[position].title)
-                )
+            // Do not reopen legacy locally cached classes (for example
+            // "Class 1") that no longer exist in the server database.
+            MobileAcademicGateway.staffClasses { result ->
+                runOnUiThread {
+                    result.onSuccess { serverClasses ->
+                        val rows = serverClasses.map {
+                            SimpleListItem(it.name, "Server-configured class", "Open")
+                        }.filter {
+                            it.title.contains(query, true) || it.subtitle.contains(query, true)
+                        }
+                        findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(rows) { position ->
+                            val className = rows.getOrNull(position)?.title.orEmpty()
+                            if (className.isNotBlank()) {
+                                startActivity(
+                                    Intent(this, ClassRecordsActivity::class.java)
+                                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
+                                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, className)
+                                )
+                            }
+                        }
+                    }.onFailure { error ->
+                        findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = SimpleListAdapter(
+                            listOf(SimpleListItem("Classes unavailable", error.message ?: "Could not load school classes", "Retry"))
+                        )
+                    }
+                }
             }
             return
         }

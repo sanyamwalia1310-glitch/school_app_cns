@@ -34,6 +34,7 @@ class AttendanceActivity : BaseActivity() {
     private lateinit var searchLayout: TextInputLayout
     private lateinit var searchInput: TextInputEditText
     private lateinit var summaryText: TextView
+    private lateinit var attendanceDateText: TextView
     private lateinit var attendanceRecycler: RecyclerView
     private lateinit var saveButton: MaterialButton
     private lateinit var historyButton: MaterialButton
@@ -49,8 +50,6 @@ class AttendanceActivity : BaseActivity() {
     private var marksMap = mutableMapOf<String, Boolean>()
     private var currentEntries = emptyList<AttendanceMarkEntry>()
     private var editDate: String? = null
-    private var serverStudentsForClass: String = ""
-    private var loadingServerStudents = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,6 +83,7 @@ class AttendanceActivity : BaseActivity() {
         })
 
         summaryText = findViewById(R.id.attendanceSummaryText)
+        attendanceDateText = findViewById(R.id.attendanceDateText)
         attendanceRecycler = findViewById(R.id.attendanceRecycler)
         attendanceRecycler.layoutManager = LinearLayoutManager(this)
         attendanceMarkAdapter = AttendanceMarkAdapter { username, present ->
@@ -210,42 +210,12 @@ class AttendanceActivity : BaseActivity() {
         historyButton.visibility = View.VISIBLE
         editButton.visibility = View.VISIBLE
         backToClassesButton.visibility = View.VISIBLE
-        // Keep the original attendance layout, but use the real server class
-        // roster for the actual save.  Search and redraw operations reuse this
-        // one result instead of making a request on every keystroke.
-        if (serverStudentsForClass != selectedClass && !loadingServerStudents) {
-            loadingServerStudents = true
-            val requestedClass = selectedClass
-            summaryText.text = "$requestedClass - Loading students…"
-            MobileAcademicGateway.staffClassStudents(requestedClass) { result ->
-                runOnUiThread {
-                    loadingServerStudents = false
-                    result.onSuccess { students ->
-                        if (selectedClass != requestedClass) {
-                            refreshAttendanceEntries()
-                            return@onSuccess
-                        }
-                        serverStudentsForClass = requestedClass
-                        classStudents = students.map {
-                            StudentProfile(
-                                username = it.username,
-                                fullName = it.fullName,
-                                className = requestedClass,
-                                rollNumber = it.rollNumber,
-                                guardianContact = "",
-                                notes = ""
-                            )
-                        }
-                        refreshAttendanceEntries()
-                    }.onFailure { error ->
-                        saveButton.isEnabled = false
-                        summaryText.text = error.message ?: "Student records could not be loaded."
-                    }
-                }
-            }
-            return
+        // Render returns the school master roster.  Firebase activation is not
+        // a condition for taking attendance.
+        if (classStudents.isEmpty() || classStudents.firstOrNull()?.className != selectedClass) {
+            classStudents = SchoolRepository.studentsForClass(selectedClass)
+            loadMasterRoster(selectedClass)
         }
-        if (serverStudentsForClass != selectedClass) return
         filteredStudents = classStudents.filter {
             it.fullName.contains(query, true) ||
                 it.username.contains(query, true) ||
@@ -286,9 +256,40 @@ class AttendanceActivity : BaseActivity() {
         } else {
             "$selectedClass - Editing attendance for $activeEditDate"
         }
+        attendanceDateText.text = "Attendance date: ${activeEditDate ?: java.time.LocalDate.now()}"
         saveButton.text = if (activeEditDate == null) getString(R.string.save_attendance) else "Save edit"
         saveButton.isEnabled = if (activeEditDate == null) pending > 0 else entries.any { !it.locked }
         attendanceRecycler.adapter = attendanceMarkAdapter
+    }
+
+    private fun loadMasterRoster(className: String) {
+        MobileAcademicGateway.staffClassStudents(className) { result ->
+            runOnUiThread {
+                result.onSuccess { roster ->
+                    if (selectedClass != className) return@onSuccess
+                    val serverStudents = roster.map {
+                        StudentProfile(
+                            username = it.username,
+                            fullName = it.fullName,
+                            className = className,
+                            rollNumber = it.rollNumber,
+                            guardianContact = "",
+                            notes = ""
+                        )
+                    }
+                    // Never hide a restored phone roster just because the
+                    // server is temporarily catching up or offline.
+                    classStudents = (serverStudents + classStudents.filter { local ->
+                        serverStudents.none { server -> server.username.equals(local.username, true) }
+                    }).distinctBy { it.username.lowercase() }
+                    refreshAttendanceEntries()
+                }.onFailure {
+                    // Keep the existing screen usable while offline.  A
+                    // successful server response always replaces this cache.
+                    attendanceDateText.text = "Attendance date: ${editDate ?: java.time.LocalDate.now()} (offline roster)"
+                }
+            }
+        }
     }
 
     private fun saveAttendance(user: com.schoolms.mobile.data.User) {
@@ -298,7 +299,7 @@ class AttendanceActivity : BaseActivity() {
             val edited = currentEntries
                 .filter { !it.locked }
                 .associate { entry -> entry.username to (marksMap[entry.username] ?: entry.present) }
-            saveAttendanceOnServer(edited, activeEditDate, "attendance records updated")
+            saveAttendanceOnServer(user, edited, activeEditDate, "attendance records updated")
             return
         }
         val pending = currentEntries.filter { !it.alreadyMarked }.associate { entry ->
@@ -308,10 +309,15 @@ class AttendanceActivity : BaseActivity() {
             Toast.makeText(this, "All students are already marked", Toast.LENGTH_SHORT).show()
             return
         }
-        saveAttendanceOnServer(pending, "", "attendance records saved")
+        saveAttendanceOnServer(user, pending, "", "attendance records saved")
     }
 
-    private fun saveAttendanceOnServer(marks: Map<String, Boolean>, attendanceDate: String, successSuffix: String) {
+    private fun saveAttendanceOnServer(
+        user: com.schoolms.mobile.data.User,
+        marks: Map<String, Boolean>,
+        attendanceDate: String,
+        successSuffix: String
+    ) {
         saveButton.isEnabled = false
         MobileAcademicGateway.saveAttendance(selectedClass, marks, attendanceDate) { result ->
             runOnUiThread {
@@ -328,7 +334,22 @@ class AttendanceActivity : BaseActivity() {
                     SchoolRepository.refreshPrivateAcademicContent { }
                     refreshAttendanceEntries()
                 }.onFailure { error ->
-                    Toast.makeText(this, error.message ?: "Attendance could not be saved on the school server.", Toast.LENGTH_LONG).show()
+                    // Keep the daily register usable when an older hosted
+                    // server still has an incomplete roster.  This writes the
+                    // same class/day record to the shared school data and the
+                    // server can reconcile it on its next successful save.
+                    val savedCount = if (attendanceDate.isBlank()) {
+                        SchoolRepository.markDailyAttendanceBatch(user, selectedClass, marks)
+                    } else {
+                        SchoolRepository.updateDailyAttendanceBatch(user, selectedClass, attendanceDate, marks)
+                    }
+                    if (savedCount > 0) {
+                        editDate = null
+                        marksMap.clear()
+                        Toast.makeText(this, "$savedCount $successSuffix", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, error.message ?: "Attendance could not be saved.", Toast.LENGTH_LONG).show()
+                    }
                     refreshAttendanceEntries()
                 }
             }

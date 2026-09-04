@@ -3,6 +3,7 @@ package com.schoolms.mobile.ui
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.graphics.Bitmap
+import android.util.Log
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
@@ -55,7 +56,7 @@ class ClassRecordsActivity : BaseActivity() {
     private var studentLabels = emptyList<String>()
     private var subjectNames = emptyList<String>()
     private var homeworkComposerOpen = false
-    private var serverStudentsLoaded = false
+    private var masterRosterLoadedFor = ""
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         selectedFileUris.clear()
@@ -240,7 +241,8 @@ class ClassRecordsActivity : BaseActivity() {
         MobileAcademicGateway.staffSubjects(className) { result ->
             runOnUiThread {
                 result.onSuccess { serverSubjects ->
-                    val merged = (subjectNames + serverSubjects.map { it.name })
+                    val merged = (subjectNames + serverSubjects.map { it.name }
+                        .filterNot { it.equals("Daily Attendance", true) })
                         .map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
                     if (merged == subjectNames) return@onSuccess
                     subjectNames = merged
@@ -253,14 +255,16 @@ class ClassRecordsActivity : BaseActivity() {
             }
         }
 
-        // The visual marks screen stays unchanged. Only its student records
-        // are refreshed from the authenticated school server once per class.
-        if (mode == MODE_MARKS && !serverStudentsLoaded) {
-            serverStudentsLoaded = true
+        // Use student_master_records as the academic roster.  The local list
+        // is only an offline fallback; a successful server response replaces
+        // it and includes students who have not activated Firebase yet.
+        if (masterRosterLoadedFor != className) {
             MobileAcademicGateway.staffClassStudents(className) { result ->
                 runOnUiThread {
-                    result.onSuccess { students ->
-                        classStudents = students.map {
+                    result.onSuccess { roster ->
+                        masterRosterLoadedFor = className
+                        val localStudents = classStudents
+                        val serverStudents = roster.map {
                             com.schoolms.mobile.data.StudentProfile(
                                 username = it.username,
                                 fullName = it.fullName,
@@ -270,9 +274,15 @@ class ClassRecordsActivity : BaseActivity() {
                                 notes = ""
                             )
                         }
+                        // Retain restored local records while the server
+                        // roster is synchronizing, rather than shrinking the
+                        // marks list to a partial response.
+                        classStudents = (serverStudents + localStudents.filter { local ->
+                            serverStudents.none { server -> server.username.equals(local.username, true) }
+                        }).distinctBy { it.username.lowercase() }
+                        studentLabels = classStudents.map { "${it.fullName} (${it.username})" }
+                        markStudentInput?.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, studentLabels))
                         bind()
-                    }.onFailure {
-                        serverStudentsLoaded = false
                     }
                 }
             }
@@ -511,8 +521,14 @@ class ClassRecordsActivity : BaseActivity() {
         saveButton.isEnabled = false
 
         fun failUpload(message: String) {
+            Log.e("SchoolMsHomework", "Homework attachment upload failed: $message")
             progressDialog.dismiss()
             saveButton.isEnabled = true
+            android.app.AlertDialog.Builder(this)
+                .setTitle("Homework attachment upload failed")
+                .setMessage(message)
+                .setPositiveButton("OK", null)
+                .show()
             onComplete(Result.failure(IllegalStateException(message)))
         }
 

@@ -166,12 +166,11 @@ object SchoolRepository {
         ensureBaselineData()
         startSharedSync()
         isInitializing = false
-        if (deletedStudentUsernames.isNotEmpty() || deletedAccountUsernames.isNotEmpty() || approvedAccountUsernames.isNotEmpty()) {
-            dirtySharedKeys.add(KEY_DELETED_STUDENTS)
-            dirtySharedKeys.add(KEY_DELETED_ACCOUNTS)
-            dirtySharedKeys.add(KEY_APPROVED_ACCOUNTS)
-            flushSharedState()
-        }
+        // Account ledgers are shared state.  They are saved at the moment an
+        // administrator changes an account, never replayed from an arbitrary
+        // device's old local cache at startup.  Replaying them here let a
+        // stale installation hide students that had already been restored on
+        // another device, and caused unnecessary Firestore writes on launch.
     }
 
     fun addChangeListener(listener: () -> Unit) {
@@ -1652,8 +1651,8 @@ object SchoolRepository {
     }
 
     private fun defaultClasses() = listOf(
-        "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4",
-        "Class 5", "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"
+        "LKG", "UKG", "Class 1", "Class 2", "Class 3", "Class 4", "Class 5",
+        "Class 6", "Class 7", "Class 8", "Class 9", "Class 10"
     )
 
     private fun seedProfilesTemplate() = mutableListOf(
@@ -2838,11 +2837,29 @@ object SchoolRepository {
 
     fun subjectItems(): List<SubjectItem> = subjectItems.sortedWith(compareBy({ classOrder(it.className) }, { it.name }))
 
-    fun subjectsForClass(className: String): List<SubjectItem> = subjectItems.filter { it.className == className }
+    fun subjectsForClass(className: String): List<SubjectItem> {
+        val assigned = subjectItems
+        .filter { it.className == className }
+        .flatMap { item ->
+            item.name.split(',', ';', '/').map { it.trim() }
+                .filter { it.isNotBlank() }
+                .map { item.copy(name = it) }
+        }
+        .distinctBy { it.name.lowercase() }
+        if (assigned.isNotEmpty()) return assigned
+        val fallback = if (className.equals("LKG", true) || className.equals("UKG", true)) {
+            listOf("English", "Hindi", "Mathematics", "EVS")
+        } else {
+            listOf("English", "Hindi", "Mathematics", "Science", "Social Science")
+        }
+        return fallback.map { SubjectItem(it, normalizeClassName(className), "Assigned later") }
+    }
 
     fun availableClasses(): List<String> {
+        val supportedClasses = defaultClasses().toSet()
         val combined = (defaultClasses() + adminClassItems.map { it.title } + studentProfiles.map { it.className })
             .map { normalizeClassName(it) }
+            .filter { it in supportedClasses }
             .distinct()
         return combined.sortedBy { classOrder(it) }
     }
@@ -3468,7 +3485,7 @@ object SchoolRepository {
         if (user.role == Role.TEACHER && !classExists(profile.className)) return false
         val normalizedSubject = subject.trim()
         val normalizedAssessment = assessment.trim().ifBlank { "Class Test 1" }
-        if (subjectItems.none { it.className == profile.className && it.name.equals(normalizedSubject, true) }) return false
+        if (subjectsForClass(profile.className).none { it.name.equals(normalizedSubject, true) }) return false
         runSharedUpdate(
             type = "marks",
             title = "Marks updated",

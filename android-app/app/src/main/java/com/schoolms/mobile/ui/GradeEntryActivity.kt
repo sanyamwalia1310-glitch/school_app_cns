@@ -44,6 +44,12 @@ class GradeEntryActivity : BaseActivity() {
     private var submitButton: MaterialButton? = null
     private var currentHistoryMarks: List<MarkItem> = emptyList()
     private val serverSavedMarks = mutableListOf<MarkItem>()
+    // Network/repository refreshes must not overwrite a teacher's unfinished
+    // form.  This activity intentionally keeps the form state keyed to the
+    // current student + subject until the save succeeds or a new subject is
+    // selected.
+    private var formDirty = false
+    private var applyingFormState = false
 
     private val assessmentOptions = listOf("Term 1", "Term 2", "Term 3", "Custom")
 
@@ -91,6 +97,7 @@ class GradeEntryActivity : BaseActivity() {
         configureDropdown(subjectInput)
         subjectInput.setOnItemClickListener { _, _, position, _ ->
             currentSubject = subjectAdapter.getItem(position).orEmpty()
+            formDirty = false
             bindHistory()
             bindAssessmentState()
         }
@@ -155,6 +162,16 @@ class GradeEntryActivity : BaseActivity() {
         statusView = status
         submitButton = submit
 
+        listOf(customInput, score, outOf).forEach { input ->
+            input.addTextChangedListener(object : TextWatcher {
+                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) = Unit
+                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) = Unit
+                override fun afterTextChanged(s: Editable?) {
+                    if (!applyingFormState) formDirty = true
+                }
+            })
+        }
+
         assessmentTypeInput.setOnItemClickListener { _, _, _, _ ->
             customLayout.visibility = if (assessmentTypeInput.text.toString() == "Custom") View.VISIBLE else View.GONE
         }
@@ -168,9 +185,15 @@ class GradeEntryActivity : BaseActivity() {
         MobileAcademicGateway.staffSubjects(className) { result ->
             runOnUiThread {
                 result.onSuccess { serverSubjects ->
-                    applySubjects(serverSubjects.map { it.name })
+                    // An empty or delayed server response must never erase the
+                    // class subjects already available on the phone.
+                    val current = (0 until subjectAdapter.count).mapNotNull { subjectAdapter.getItem(it) }
+                    applySubjects(current + serverSubjects.map { it.name }
+                        .filterNot { it.equals("Daily Attendance", true) })
                 }.onFailure { error ->
-                    statusView?.text = "Subjects could not be refreshed: ${error.message ?: "server unavailable"}"
+                    if (currentSubject.isBlank()) {
+                        statusView?.text = "Subjects could not be refreshed: ${error.message ?: "server unavailable"}"
+                    }
                 }
             }
         }
@@ -178,16 +201,18 @@ class GradeEntryActivity : BaseActivity() {
 
     private fun applySubjects(names: List<String>) {
         val subjects = names.map { it.trim() }.filter { it.isNotBlank() }.distinctBy { it.lowercase() }
-        subjectAdapter.clear()
-        subjectAdapter.addAll(subjects)
-        subjectAdapter.notifyDataSetChanged()
+        if (subjectAdapter.count != subjects.size || (0 until subjectAdapter.count).any { subjectAdapter.getItem(it) != subjects[it] }) {
+            subjectAdapter.clear()
+            subjectAdapter.addAll(subjects)
+            subjectAdapter.notifyDataSetChanged()
+        }
 
         currentSubject = when {
             currentSubject.isNotBlank() && subjects.any { it.equals(currentSubject, true) } -> currentSubject
             else -> subjects.firstOrNull().orEmpty()
         }
-        subjectInput.setText(currentSubject, false)
-        bindAssessmentState()
+        if (!subjectInput.text.toString().equals(currentSubject, true)) subjectInput.setText(currentSubject, false)
+        if (!formDirty) bindAssessmentState()
     }
 
     private fun bindAssessmentState() {
@@ -207,18 +232,24 @@ class GradeEntryActivity : BaseActivity() {
         statusView?.text = existing?.let { "Last: ${it.assessment} | ${it.score}/${it.outOf} | ${it.grade}" }
             ?: "No marks recorded for this subject yet."
 
-        val knownAssessment = existing?.assessment?.takeIf { assessmentOptions.any { option -> option.equals(it, true) } }
-        if (knownAssessment == null) {
-            assessmentInput?.setText("Custom", false)
-            customAssessmentLayout?.visibility = View.VISIBLE
-            customAssessmentInput?.setText(existing?.assessment.orEmpty())
-        } else {
-            assessmentInput?.setText(knownAssessment, false)
-            customAssessmentLayout?.visibility = View.GONE
-            customAssessmentInput?.setText("")
+        if (formDirty) return
+        applyingFormState = true
+        try {
+            val knownAssessment = existing?.assessment?.takeIf { assessmentOptions.any { option -> option.equals(it, true) } }
+            if (knownAssessment == null) {
+                assessmentInput?.setText("Custom", false)
+                customAssessmentLayout?.visibility = View.VISIBLE
+                customAssessmentInput?.setText(existing?.assessment.orEmpty())
+            } else {
+                assessmentInput?.setText(knownAssessment, false)
+                customAssessmentLayout?.visibility = View.GONE
+                customAssessmentInput?.setText("")
+            }
+            scoreInput?.setText(existing?.score?.toString().orEmpty())
+            outOfInput?.setText(existing?.outOf?.toString().orEmpty())
+        } finally {
+            applyingFormState = false
         }
-        scoreInput?.setText(existing?.score?.toString().orEmpty())
-        outOfInput?.setText(existing?.outOf?.toString().orEmpty())
     }
 
     private fun bindHistory() {
@@ -260,6 +291,8 @@ class GradeEntryActivity : BaseActivity() {
     }
 
     private fun fillMarkForEdit(mark: MarkItem) {
+        formDirty = false
+        applyingFormState = true
         currentSubject = mark.subject
         subjectInput.setText(mark.subject, false)
         val knownAssessment = mark.assessment.takeIf { assessmentOptions.any { option -> option.equals(it, true) } }
@@ -274,6 +307,7 @@ class GradeEntryActivity : BaseActivity() {
         }
         scoreInput?.setText(mark.score.toString())
         outOfInput?.setText(mark.outOf.toString())
+        applyingFormState = false
         submitButton?.text = "Update grade"
         statusView?.text = "Editing: ${mark.assessment} | ${mark.score}/${mark.outOf} | ${mark.grade}"
     }
@@ -348,11 +382,28 @@ class GradeEntryActivity : BaseActivity() {
                     }
                     serverSavedMarks.add(MarkItem(profile.username, profile.fullName, subject, obtained, total, assessment))
                     SchoolRepository.refreshPrivateAcademicContent { }
+                    formDirty = false
                     Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
                     bindHistory()
                     bindAssessmentState()
                 }.onFailure { error ->
-                    Toast.makeText(this, error.message ?: "Marks could not be saved on the school server.", Toast.LENGTH_LONG).show()
+                    val user = SessionManager.currentUser
+                    val savedLocally = user != null && SchoolRepository.addMark(
+                        user, profile.username, profile.fullName, subject, obtained, total, assessment
+                    )
+                    if (savedLocally) {
+                        serverSavedMarks.removeAll {
+                            it.studentUsername.equals(profile.username, true) &&
+                                it.subject.equals(subject, true) && it.assessment.equals(assessment, true)
+                        }
+                        serverSavedMarks.add(MarkItem(profile.username, profile.fullName, subject, obtained, total, assessment))
+                        formDirty = false
+                        Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
+                        bindHistory()
+                        bindAssessmentState()
+                    } else {
+                        Toast.makeText(this, error.message ?: "Marks could not be saved.", Toast.LENGTH_LONG).show()
+                    }
                 }
             }
         }

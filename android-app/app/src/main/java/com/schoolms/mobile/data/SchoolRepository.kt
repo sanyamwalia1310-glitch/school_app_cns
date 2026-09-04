@@ -2839,20 +2839,21 @@ object SchoolRepository {
 
     fun subjectsForClass(className: String): List<SubjectItem> {
         val assigned = subjectItems
-        .filter { it.className == className }
-        .flatMap { item ->
+            .filter { it.className == className }
+            .flatMap { item ->
+                item.name.split(',', ';', '/').map { it.trim() }
+                    .filter { it.isNotBlank() }
+                    .map { item.copy(name = it) }
+            }
+        val allSchoolSubjects = subjectItems.flatMap { item ->
             item.name.split(',', ';', '/').map { it.trim() }
                 .filter { it.isNotBlank() }
-                .map { item.copy(name = it) }
+                .map { SubjectItem(it, normalizeClassName(className), item.teacherName) }
         }
-        .distinctBy { it.name.lowercase() }
-        if (assigned.isNotEmpty()) return assigned
-        val fallback = if (className.equals("LKG", true) || className.equals("UKG", true)) {
-            listOf("English", "Hindi", "Mathematics", "EVS")
-        } else {
-            listOf("English", "Hindi", "Mathematics", "Science", "Social Science")
-        }
-        return fallback.map { SubjectItem(it, normalizeClassName(className), "Assigned later") }
+        val standardSubjects = listOf("English", "Hindi", "Mathematics", "Science", "Social Science", "EVS", "S.st", "Sanskrit")
+            .map { SubjectItem(it, normalizeClassName(className), "Assigned later") }
+        return (assigned + allSchoolSubjects + standardSubjects)
+            .distinctBy { it.name.lowercase() }
     }
 
     fun availableClasses(): List<String> {

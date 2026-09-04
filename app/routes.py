@@ -1399,7 +1399,7 @@ def mobile_staff_classes():
     try:
         actor = mobile_profile_from_payload(payload, "admin", "teacher")
         db = get_db()
-        query = "SELECT id, name || ' - ' || section AS class_name FROM classes"
+        query = "SELECT id, name || CASE WHEN TRIM(COALESCE(section, '')) = '' THEN '' ELSE ' - ' || section END AS class_name FROM classes"
         params = ()
         if actor["role"] == "teacher":
             query += " WHERE teacher_id = ?"
@@ -1590,7 +1590,7 @@ def list_mobile_tests():
         profile = mobile_profile_from_payload(payload, "student", "teacher", "admin")
         db = get_db()
         query = """SELECT t.*, s.name AS subject_name, u.full_name AS teacher_name,
-            c.name || ' - ' || c.section AS class_name
+            c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
             FROM scheduled_tests t JOIN subjects s ON s.id = t.subject_id JOIN users u ON u.id = t.teacher_id
             LEFT JOIN classes c ON c.id = t.class_id"""
         params = ()
@@ -1632,7 +1632,7 @@ def list_mobile_attendance():
         profile = mobile_profile_from_payload(payload, "student")
         rows = get_db().execute(
             """SELECT a.id, a.attendance_date, a.status, s.name AS subject_name,
-                      c.name || ' - ' || c.section AS class_name
+                      c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
                FROM attendance a
                JOIN subjects s ON s.id = a.subject_id
                JOIN classes c ON c.id = a.class_id
@@ -1689,7 +1689,7 @@ def list_mobile_homework():
         if profile["role"] == "student":
             rows = db.execute(
                 """SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name,
-                    c.name || ' - ' || c.section AS class_name
+                    c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
                 FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
                 LEFT JOIN classes c ON c.id = h.class_id ORDER BY h.due_date ASC, h.id DESC"""
             ).fetchall()
@@ -1697,7 +1697,7 @@ def list_mobile_homework():
         elif profile["role"] == "teacher":
             rows = db.execute(
                 """SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name,
-                    c.name || ' - ' || c.section AS class_name
+                    c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
                 FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
                 LEFT JOIN classes c ON c.id = h.class_id WHERE h.teacher_id = ? ORDER BY h.due_date ASC, h.id DESC""",
                 (profile["id"],),
@@ -1705,7 +1705,7 @@ def list_mobile_homework():
         else:
             rows = db.execute(
                 """SELECT h.*, s.name AS subject_name, u.full_name AS teacher_name,
-                    c.name || ' - ' || c.section AS class_name
+                    c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
                 FROM homework h JOIN subjects s ON s.id = h.subject_id JOIN users u ON u.id = h.teacher_id
                 LEFT JOIN classes c ON c.id = h.class_id ORDER BY h.due_date ASC, h.id DESC"""
             ).fetchall()

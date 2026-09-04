@@ -1,5 +1,7 @@
 import hashlib
+import json
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -530,6 +532,16 @@ def student_in_class(db, student_id, class_id):
     return row is not None
 
 
+def master_student_in_class(db, student_identifier, class_id):
+    """Resolve a permanent school student ID without requiring a login account."""
+    return db.execute(
+        """SELECT id, student_id, full_name, class_id, roll_no, login_user_id
+        FROM student_master_records
+        WHERE LOWER(student_id) = LOWER(?) AND class_id = ?""",
+        (str(student_identifier or "").strip(), class_id),
+    ).fetchone()
+
+
 def mobile_class_by_name(db, class_name):
     """Resolve Android's display name (for example, ``Grade 8 - A``) safely."""
     value = str(class_name or "").strip()
@@ -563,6 +575,92 @@ def mobile_subject_for_class(db, class_id, subject_name=""):
             raise ValueError("This subject is not assigned to the selected class.")
         raise ValueError("No subject is assigned to this class. Ask an administrator to configure class subjects.")
     return row
+
+
+def mobile_daily_attendance_subject(db, class_id):
+    """Return the one internal subject used for each class's daily register.
+
+    Attendance is intentionally recorded once per student/class/day; subjects
+    are used only for marks.  The database still requires a subject foreign
+    key, so this stable internal assignment prevents duplicate daily records
+    when academic subject assignments are changed later.
+    """
+    subject = db.execute(
+        "SELECT id, name FROM subjects WHERE LOWER(name) = LOWER(?) ORDER BY id LIMIT 1",
+        ("Daily Attendance",),
+    ).fetchone()
+    if not subject:
+        cursor = db.execute(
+            "INSERT INTO subjects (name, code) VALUES (?, ?) RETURNING id, name",
+            ("Daily Attendance", f"daily-attendance-{class_id}"),
+        )
+        subject = cursor.fetchone()
+    db.execute(
+        "INSERT INTO class_subjects (class_id, subject_id) VALUES (?, ?) ON CONFLICT(class_id, subject_id) DO NOTHING",
+        (class_id, subject["id"]),
+    )
+    return subject
+
+
+def mobile_roster_class_key(value):
+    """Compare legacy Android class labels without depending on spacing."""
+    text = str(value or "").strip().lower()
+    if text in {"lkg", "ukg"}:
+        return text
+    match = re.search(r"\d+", text)
+    return f"class{int(match.group())}" if match else " ".join(text.split())
+
+
+def reconcile_mobile_shared_roster_class(db, school_class):
+    """Repair legacy Firestore roster enrollment before a staff academic save.
+
+    Older Android releases stored their approved roster in
+    ``shared_state/schoolhub`` while academic saves are protected by the
+    PostgreSQL master roster.  Keeping this small bridge on the server means a
+    restored learner cannot be rejected simply because a hosted database was
+    provisioned after the Android roster.
+    """
+    try:
+        from firebase_admin import firestore
+
+        document = firestore.client().collection("shared_state").document("schoolhub").get().to_dict() or {}
+        raw_profiles = document.get("profiles", "[]")
+        profiles = json.loads(raw_profiles) if isinstance(raw_profiles, str) else []
+        if not isinstance(profiles, list):
+            return
+    except Exception as error:
+        current_app.logger.warning("Could not read the legacy Android roster: %s", type(error).__name__)
+        return
+
+    expected_class = mobile_roster_class_key(
+        f"{school_class['name']} {school_class['section'] or ''}"
+    )
+    for profile in profiles:
+        if not isinstance(profile, dict) or mobile_roster_class_key(profile.get("className")) != expected_class:
+            continue
+        student_id = str(profile.get("username", "")).strip()
+        full_name = str(profile.get("fullName", "")).strip() or student_id
+        if not student_id:
+            continue
+        record = db.execute(
+            "SELECT id, class_id FROM student_master_records WHERE LOWER(student_id) = LOWER(?)",
+            (student_id,),
+        ).fetchone()
+        roll_no = str(profile.get("rollNumber", "")).strip() or None
+        guardian_name = str(profile.get("guardianContact", "")).strip() or None
+        if record:
+            if record["class_id"] != school_class["id"]:
+                db.execute(
+                    "UPDATE student_master_records SET class_id = ?, roll_no = COALESCE(NULLIF(roll_no, ''), ?), guardian_name = COALESCE(NULLIF(guardian_name, ''), ?) WHERE id = ?",
+                    (school_class["id"], roll_no, guardian_name, record["id"]),
+                )
+        else:
+            db.execute(
+                """INSERT INTO student_master_records
+                (student_id, full_name, class_id, roll_no, guardian_name, registration_completed)
+                VALUES (?, ?, ?, ?, ?, 0)""",
+                (student_id, full_name, school_class["id"], roll_no, guardian_name),
+            )
 
 
 def require_mobile_staff_class_access(db, actor, class_id):
@@ -1385,10 +1483,10 @@ def mobile_staff_subjects():
 
 @main.route("/api/mobile/staff/class-students", methods=["POST"])
 def mobile_staff_class_students():
-    """Return real enrolled students for one authorized staff class.
+    """Return the permanent school roster for one authorized staff class.
 
-    The Android list remains in its familiar layout; this endpoint only replaces
-    stale sample identities before marks or attendance are saved.
+    Firebase registration enables a student to sign in, but must never control
+    whether they appear in academic administration screens.
     """
     payload = request.get_json(silent=True) or {}
     try:
@@ -1397,12 +1495,10 @@ def mobile_staff_class_students():
         school_class = mobile_class_by_name(db, payload.get("class_name"))
         require_mobile_staff_class_access(db, actor, school_class["id"])
         rows = db.execute(
-            """SELECT u.username, u.full_name, COALESCE(sp.roll_no, '') AS roll_no
-            FROM users u
-            JOIN enrollments e ON e.student_id = u.id
-            LEFT JOIN student_profiles sp ON sp.user_id = u.id
-            WHERE e.class_id = ? AND u.role = 'student' AND u.activated = 1
-            ORDER BY sp.roll_no, u.full_name, u.username""",
+            """SELECT student_id AS username, full_name, COALESCE(roll_no, '') AS roll_no
+            FROM student_master_records
+            WHERE class_id = ?
+            ORDER BY roll_no, full_name, student_id""",
             (school_class["id"],),
         ).fetchall()
         return jsonify(items=[dict(row) for row in rows])
@@ -1419,20 +1515,17 @@ def save_mobile_marks():
         db = get_db()
         school_class = mobile_class_by_name(db, payload.get("class_name"))
         require_mobile_staff_class_access(db, actor, school_class["id"])
+        reconcile_mobile_shared_roster_class(db, school_class)
         subject = mobile_subject_for_class(db, school_class["id"], payload.get("subject_name"))
         username = str(payload.get("student_username", "")).strip()
-        student = db.execute(
-            """SELECT u.id FROM users u JOIN enrollments e ON e.student_id = u.id
-            WHERE LOWER(u.username) = LOWER(?) AND u.role = 'student' AND e.class_id = ?""",
-            (username, school_class["id"]),
-        ).fetchone()
+        student = master_student_in_class(db, username, school_class["id"])
         assessment = str(payload.get("assessment", "")).strip()
         score, total = int(payload.get("score")), int(payload.get("out_of"))
         if not student or not assessment or total <= 0 or score < 0 or score > total:
-            raise ValueError("Enter a valid enrolled student, assessment, and marks.")
+            raise ValueError("Enter a valid school student, assessment, and marks.")
         grade = grade_from_score(score, total)
         existing = db.execute(
-            """SELECT id FROM marks WHERE student_id = ? AND class_id = ? AND subject_id = ? AND exam_name = ?
+            """SELECT id FROM marks WHERE master_student_id = ? AND class_id = ? AND subject_id = ? AND exam_name = ?
             ORDER BY id DESC LIMIT 1""",
             (student["id"], school_class["id"], subject["id"], assessment),
         ).fetchone()
@@ -1444,16 +1537,14 @@ def save_mobile_marks():
             mark_id = existing["id"]
         else:
             cursor = db.execute(
-                """INSERT INTO marks (student_id, class_id, subject_id, exam_name, total_marks, obtained_marks, grade, entered_by)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
-                (student["id"], school_class["id"], subject["id"], assessment, total, score, grade, actor["id"]),
+                """INSERT INTO marks (student_id, master_student_id, class_id, subject_id, exam_name, total_marks, obtained_marks, grade, entered_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id""",
+                (student["login_user_id"], student["id"], school_class["id"], subject["id"], assessment, total, score, grade, actor["id"]),
             )
             mark_id = cursor.fetchone()["id"]
         db.commit()
-        notify_student_profiles(
-            db, [student["id"]], title="New marks published", body="New marks have been published.",
-            event_type="marks", destination="marks", content_id=mark_id,
-        )
+        if student["login_user_id"]:
+            notify_student_profiles(db, [student["login_user_id"]], title="New marks published", body="New marks have been published.", event_type="marks", destination="marks", content_id=mark_id)
         return jsonify(id=mark_id, grade=grade, message="Marks saved.")
     except (TypeError, ValueError, FirebaseAuthProvisioningError) as error:
         get_db().rollback()
@@ -1469,30 +1560,40 @@ def save_mobile_attendance():
         db = get_db()
         school_class = mobile_class_by_name(db, payload.get("class_name"))
         require_mobile_staff_class_access(db, actor, school_class["id"])
-        subject = mobile_subject_for_class(db, school_class["id"], payload.get("subject_name"))
+        reconcile_mobile_shared_roster_class(db, school_class)
+        subject = mobile_daily_attendance_subject(db, school_class["id"])
         attendance_date = str(payload.get("attendance_date") or date.today().isoformat()).strip()
         date.fromisoformat(attendance_date)
         requested_marks = payload.get("marks")
         if not isinstance(requested_marks, dict) or not requested_marks:
             raise ValueError("Choose at least one student attendance record.")
         enrolled = {
-            row["username"]: row["id"]
+            row["student_id"].lower(): row
             for row in db.execute(
-                """SELECT u.id, LOWER(u.username) AS username FROM users u JOIN enrollments e ON e.student_id = u.id
-                WHERE e.class_id = ? AND u.role = 'student'""", (school_class["id"],)
+                """SELECT id, student_id, login_user_id FROM student_master_records
+                WHERE class_id = ?""", (school_class["id"],)
             ).fetchall()
         }
         rows = []
-        for raw_username, present in requested_marks.items():
+        for raw_username, requested_status in requested_marks.items():
             username = str(raw_username).strip().lower()
-            if username not in enrolled or not isinstance(present, bool):
-                raise ValueError("Attendance may be saved only for enrolled students.")
-            rows.append((enrolled[username], school_class["id"], subject["id"], attendance_date,
-                         "present" if present else "absent", actor["id"]))
+            if username not in enrolled:
+                raise ValueError("Attendance may be saved only for students in the selected school class.")
+            # Existing Android builds send booleans; newer builds can also
+            # express Leave. Keep both payload formats compatible.
+            if isinstance(requested_status, bool):
+                status = "present" if requested_status else "absent"
+            else:
+                status = str(requested_status).strip().lower()
+                if status not in {"present", "absent", "leave"}:
+                    raise ValueError("Attendance status must be Present, Absent, or Leave.")
+            student = enrolled[username]
+            rows.append((student["login_user_id"], student["id"], school_class["id"], subject["id"], attendance_date,
+                         status, actor["id"]))
         db.executemany(
-            """INSERT INTO attendance (student_id, class_id, subject_id, attendance_date, status, marked_by)
-            VALUES (?, ?, ?, ?, ?, ?)
-            ON CONFLICT(student_id, class_id, subject_id, attendance_date) DO UPDATE SET
+            """INSERT INTO attendance (student_id, master_student_id, class_id, subject_id, attendance_date, status, marked_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(master_student_id, class_id, subject_id, attendance_date) DO UPDATE SET
                 status = excluded.status, marked_by = excluded.marked_by""",
             rows,
         )
@@ -1593,8 +1694,9 @@ def list_mobile_marks():
             """SELECT m.id, m.exam_name, m.total_marks, m.obtained_marks, m.grade,
                       s.name AS subject_name, m.class_id
                FROM marks m JOIN subjects s ON s.id = m.subject_id
-               WHERE m.student_id = ? ORDER BY m.id DESC""",
-            (profile["id"],),
+               LEFT JOIN student_master_records sm ON sm.id = m.master_student_id
+               WHERE sm.login_user_id = ? OR m.student_id = ? ORDER BY m.id DESC""",
+            (profile["id"], profile["id"]),
         ).fetchall()
         return jsonify(items=[dict(row) for row in rows])
     except (ValueError, FirebaseAuthProvisioningError) as error:
@@ -1613,8 +1715,9 @@ def list_mobile_attendance():
                FROM attendance a
                JOIN subjects s ON s.id = a.subject_id
                JOIN classes c ON c.id = a.class_id
-               WHERE a.student_id = ? ORDER BY a.attendance_date DESC, a.id DESC""",
-            (profile["id"],),
+               LEFT JOIN student_master_records sm ON sm.id = a.master_student_id
+               WHERE sm.login_user_id = ? OR a.student_id = ? ORDER BY a.attendance_date DESC, a.id DESC""",
+            (profile["id"], profile["id"]),
         ).fetchall()
         return jsonify(items=[dict(row) for row in rows])
     except (ValueError, FirebaseAuthProvisioningError) as error:

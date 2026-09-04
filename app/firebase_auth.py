@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from flask import current_app
@@ -13,7 +14,7 @@ class FirebaseAuthProvisioningError(RuntimeError):
 
 
 def _firebase_auth():
-    """Lazily initialise Firebase Admin using ADC or an explicitly configured server key file."""
+    """Lazily initialise Firebase Admin once, using Render JSON before any file path."""
     try:
         import firebase_admin
         from firebase_admin import auth, credentials
@@ -24,17 +25,35 @@ def _firebase_auth():
 
     try:
         firebase_admin.get_app()
+        return auth
     except ValueError:
-        key_path = current_app.config["FIREBASE_SERVICE_ACCOUNT_PATH"]
-        key_json = current_app.config["FIREBASE_SERVICE_ACCOUNT_JSON"]
+        key_path = current_app.config["FIREBASE_SERVICE_ACCOUNT_PATH"].strip()
+        key_json = current_app.config["FIREBASE_SERVICE_ACCOUNT_JSON"].strip()
+        is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
         credential = None
         if key_json:
             try:
-                credential = credentials.Certificate(json.loads(key_json))
-            except (TypeError, ValueError) as error:
+                service_account = json.loads(key_json)
+                if not isinstance(service_account, dict):
+                    raise ValueError("credential is not a JSON object")
+                configured_project = current_app.config["FIREBASE_PROJECT_ID"].strip()
+                credential_project = str(service_account.get("project_id", "")).strip()
+                if configured_project and credential_project != configured_project:
+                    raise ValueError("credential project_id does not match FIREBASE_PROJECT_ID")
+                credential = credentials.Certificate(service_account)
+            except (TypeError, ValueError, json.JSONDecodeError) as error:
+                current_app.logger.error("Firebase Admin JSON credential rejected: %s", error)
                 raise FirebaseAuthProvisioningError(
                     "Firebase Admin service-account JSON is invalid on this server."
                 ) from error
+        elif is_render:
+            # A Windows/local path cannot exist in a Render container.  Never let
+            # it override or masquerade as the Render JSON credential.
+            if key_path:
+                current_app.logger.warning("Ignoring FIREBASE_SERVICE_ACCOUNT_PATH on Render; configure FIREBASE_SERVICE_ACCOUNT_JSON.")
+            raise FirebaseAuthProvisioningError(
+                "Firebase Admin JSON is not configured on this Render service."
+            )
         elif key_path:
             if not Path(key_path).is_file():
                 raise FirebaseAuthProvisioningError(
@@ -47,6 +66,7 @@ def _firebase_auth():
         try:
             firebase_admin.initialize_app(credential=credential, options=options or None)
         except Exception as error:  # Credentials errors must not disclose implementation details to clients.
+            current_app.logger.exception("Firebase Admin initialization failed: %s", type(error).__name__)
             raise FirebaseAuthProvisioningError(
                 "Firebase Admin is not configured correctly on the server."
             ) from error

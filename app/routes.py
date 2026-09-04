@@ -874,13 +874,44 @@ def firebase_session_login():
     """Create the existing Flask role session only after Firebase has authenticated the user."""
     payload = request.get_json(silent=True) or {}
     try:
-        uid = verified_firebase_uid(str(payload.get("firebase_id_token", "")).strip())
-        profiles = get_db().execute(
+        id_token = str(payload.get("firebase_id_token", "")).strip()
+        uid = verified_firebase_uid(id_token)
+        db = get_db()
+        profiles = db.execute(
             """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
             WHERE l.firebase_uid = ? AND u.role IN ('student', 'teacher') AND u.activated = 1
             ORDER BY u.role, u.username""",
             (uid,),
         ).fetchall()
+        # Legacy Android accounts used the deterministic Firebase address
+        # <school-id>@cns-paunta.app before profile links existed on Flask.
+        # Repair only this provable mapping: the authenticated Firebase email must
+        # exactly equal the requested activated school record's legacy address.
+        # Real-email and shared-parent accounts are never guessed or auto-linked.
+        legacy_school_id = str(payload.get("legacy_school_id", "")).strip()
+        if not profiles and legacy_school_id:
+            legacy_user = db.execute(
+                """SELECT id, username FROM users WHERE LOWER(username) = LOWER(?)
+                AND role IN ('student', 'teacher') AND activated = 1 LIMIT 1""",
+                (legacy_school_id,),
+            ).fetchone()
+            if legacy_user:
+                firebase_email, _ = firebase_identity_email(uid, id_token)
+                domain = current_app.config["FIREBASE_AUTH_EMAIL_DOMAIN"].strip().lower()
+                expected_email = f"{legacy_user['username'].strip().lower()}@{domain}"
+                if domain and firebase_email == expected_email:
+                    db.execute(
+                        """INSERT INTO firebase_profile_links (firebase_uid, user_id) VALUES (?, ?)
+                        ON CONFLICT(firebase_uid, user_id) DO NOTHING""",
+                        (uid, legacy_user["id"]),
+                    )
+                    db.commit()
+                    profiles = db.execute(
+                        """SELECT u.* FROM firebase_profile_links l JOIN users u ON u.id = l.user_id
+                        WHERE l.firebase_uid = ? AND u.role IN ('student', 'teacher') AND u.activated = 1
+                        ORDER BY u.role, u.username""",
+                        (uid,),
+                    ).fetchall()
         if not profiles:
             raise FirebaseAuthProvisioningError("No active school account is linked to this Firebase login.")
         return jsonify(message="Select the school profile to use.", profiles=[{"id": row["id"], "identifier": row["username"], "full_name": row["full_name"], "role": row["role"]} for row in profiles])

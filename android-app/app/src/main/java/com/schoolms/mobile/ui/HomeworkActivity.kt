@@ -328,23 +328,31 @@ class HomeworkActivity : BaseActivity() {
     }
 
     private fun showAddHomeworkClassPicker() {
-        val classes = SchoolRepository.availableClasses()
-        if (classes.isEmpty()) {
-            Toast.makeText(this, "No classes available", Toast.LENGTH_SHORT).show()
-            return
-        }
-        AlertDialog.Builder(this)
-            .setTitle("Add homework for class")
-            .setItems(classes.toTypedArray()) { _, which ->
-                startActivity(
-                    Intent(this, ClassRecordsActivity::class.java)
-                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
-                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, classes[which])
-                        .putExtra(ClassRecordsActivity.EXTRA_OPEN_HOMEWORK_COMPOSER, true)
-                )
+        MobileAcademicGateway.staffClasses { result ->
+            runOnUiThread {
+                result.onSuccess { serverClasses ->
+                    val classes = serverClasses.map { it.name }
+                    if (classes.isEmpty()) {
+                        Toast.makeText(this, "No server class is assigned to this account", Toast.LENGTH_LONG).show()
+                        return@onSuccess
+                    }
+                    AlertDialog.Builder(this)
+                        .setTitle("Add homework for class")
+                        .setItems(classes.toTypedArray()) { _, which ->
+                            startActivity(
+                                Intent(this, ClassRecordsActivity::class.java)
+                                    .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_HOMEWORK)
+                                    .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, classes[which])
+                                    .putExtra(ClassRecordsActivity.EXTRA_OPEN_HOMEWORK_COMPOSER, true)
+                            )
+                        }
+                        .setNegativeButton("Cancel", null)
+                        .show()
+                }.onFailure { error ->
+                    Toast.makeText(this, error.message ?: "Server classes could not be loaded", Toast.LENGTH_LONG).show()
+                }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+        }
     }
 
     private fun showTeacherHomeworkActions(item: HomeworkItem) {

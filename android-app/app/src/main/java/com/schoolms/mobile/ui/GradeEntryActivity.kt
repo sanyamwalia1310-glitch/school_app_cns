@@ -65,7 +65,18 @@ class GradeEntryActivity : BaseActivity() {
         historyRecycler.adapter = SimpleListAdapter(emptyList())
 
         val username = intent.getStringExtra(EXTRA_USERNAME).orEmpty()
-        val profile = SchoolRepository.profileFor(username)
+        val profile = SchoolRepository.profileFor(username) ?: run {
+            val serverClass = intent.getStringExtra(EXTRA_CLASS_NAME).orEmpty()
+            val fullName = intent.getStringExtra(EXTRA_FULL_NAME).orEmpty()
+            if (serverClass.isBlank() || fullName.isBlank()) null else StudentProfile(
+                username = username,
+                fullName = fullName,
+                className = serverClass,
+                rollNumber = intent.getStringExtra(EXTRA_ROLL_NUMBER).orEmpty(),
+                guardianContact = "",
+                notes = ""
+            )
+        }
         if (profile == null) {
             Toast.makeText(this, "Student profile not found", Toast.LENGTH_SHORT).show()
             finish()
@@ -363,5 +374,7 @@ class GradeEntryActivity : BaseActivity() {
     companion object {
         const val EXTRA_USERNAME = "extra_username"
         const val EXTRA_CLASS_NAME = "extra_class_name"
+        const val EXTRA_FULL_NAME = "extra_full_name"
+        const val EXTRA_ROLL_NUMBER = "extra_roll_number"
     }
 }

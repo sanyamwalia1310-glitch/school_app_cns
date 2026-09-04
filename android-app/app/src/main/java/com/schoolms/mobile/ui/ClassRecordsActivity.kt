@@ -55,6 +55,7 @@ class ClassRecordsActivity : BaseActivity() {
     private var studentLabels = emptyList<String>()
     private var subjectNames = emptyList<String>()
     private var homeworkComposerOpen = false
+    private var serverStudentsLoaded = false
 
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
         selectedFileUris.clear()
@@ -252,6 +253,31 @@ class ClassRecordsActivity : BaseActivity() {
             }
         }
 
+        // The visual marks screen stays unchanged. Only its student records
+        // are refreshed from the authenticated school server once per class.
+        if (mode == MODE_MARKS && !serverStudentsLoaded) {
+            serverStudentsLoaded = true
+            MobileAcademicGateway.staffClassStudents(className) { result ->
+                runOnUiThread {
+                    result.onSuccess { students ->
+                        classStudents = students.map {
+                            com.schoolms.mobile.data.StudentProfile(
+                                username = it.username,
+                                fullName = it.fullName,
+                                className = className,
+                                rollNumber = it.rollNumber,
+                                guardianContact = "",
+                                notes = ""
+                            )
+                        }
+                        bind()
+                    }.onFailure {
+                        serverStudentsLoaded = false
+                    }
+                }
+            }
+        }
+
     }
 
     private fun bind() {
@@ -273,12 +299,20 @@ class ClassRecordsActivity : BaseActivity() {
                 }
             }
             MODE_MARKS -> {
-                val rows = SchoolRepository.marksRowsWithUsernamesForClass(className, query)
-                recyclerView.adapter = SimpleListAdapter(rows.map { it.second }) { position ->
+                val students = classStudents.filter {
+                    it.fullName.contains(query, true) || it.username.contains(query, true) || it.rollNumber.contains(query, true)
+                }
+                val rows = students.map {
+                    SimpleListItem(it.fullName, "Roll: ${it.rollNumber.ifBlank { "--" }}\nTap to add or update grades", it.username)
+                }
+                recyclerView.adapter = SimpleListAdapter(rows) { position ->
+                    val student = students.getOrNull(position) ?: return@SimpleListAdapter
                     startActivity(
                         Intent(this, GradeEntryActivity::class.java)
-                            .putExtra(GradeEntryActivity.EXTRA_USERNAME, rows[position].first)
+                            .putExtra(GradeEntryActivity.EXTRA_USERNAME, student.username)
                             .putExtra(GradeEntryActivity.EXTRA_CLASS_NAME, className)
+                            .putExtra(GradeEntryActivity.EXTRA_FULL_NAME, student.fullName)
+                            .putExtra(GradeEntryActivity.EXTRA_ROLL_NUMBER, student.rollNumber)
                     )
                 }
             }

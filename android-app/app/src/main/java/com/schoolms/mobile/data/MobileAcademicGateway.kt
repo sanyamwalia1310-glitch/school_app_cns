@@ -44,6 +44,7 @@ object MobileAcademicGateway {
     data class Download(val url: String, val filename: String)
     data class Upload(val mediaId: Int, val filename: String)
     data class StaffSubject(val name: String)
+    data class StaffStudent(val username: String, val fullName: String, val rollNumber: String)
 
     fun homework(callback: (Result<List<Homework>>) -> Unit) = authenticated("/api/mobile/homework/list", callback) { payload ->
         payload.items().map { item ->
@@ -132,6 +133,13 @@ object MobileAcademicGateway {
             payload.items().map {
                 StaffSubject(it.string("name"))
             }.filter { it.name.isNotBlank() }
+        }
+
+    fun staffClassStudents(className: String, callback: (Result<List<StaffStudent>>) -> Unit) =
+        authenticated("/api/mobile/staff/class-students", callback, mapOf("class_name" to className)) { payload ->
+            payload.items().map {
+                StaffStudent(it.string("username"), it.string("full_name"), it.string("roll_no"))
+            }.filter { it.username.isNotBlank() }
         }
 
     fun saveMark(

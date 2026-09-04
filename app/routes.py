@@ -1383,6 +1383,33 @@ def mobile_staff_subjects():
         return jsonify(error=str(error)), 403
 
 
+@main.route("/api/mobile/staff/class-students", methods=["POST"])
+def mobile_staff_class_students():
+    """Return real enrolled students for one authorized staff class.
+
+    The Android list remains in its familiar layout; this endpoint only replaces
+    stale sample identities before marks or attendance are saved.
+    """
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        school_class = mobile_class_by_name(db, payload.get("class_name"))
+        require_mobile_staff_class_access(db, actor, school_class["id"])
+        rows = db.execute(
+            """SELECT u.username, u.full_name, COALESCE(sp.roll_no, '') AS roll_no
+            FROM users u
+            JOIN enrollments e ON e.student_id = u.id
+            LEFT JOIN student_profiles sp ON sp.user_id = u.id
+            WHERE e.class_id = ? AND u.role = 'student' AND u.activated = 1
+            ORDER BY sp.roll_no, u.full_name, u.username""",
+            (school_class["id"],),
+        ).fetchall()
+        return jsonify(items=[dict(row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
 @main.route("/api/mobile/marks", methods=["POST"])
 def save_mobile_marks():
     """Save marks server-side and notify only the affected student profile."""

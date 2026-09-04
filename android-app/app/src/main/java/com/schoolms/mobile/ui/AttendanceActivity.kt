@@ -49,6 +49,8 @@ class AttendanceActivity : BaseActivity() {
     private var marksMap = mutableMapOf<String, Boolean>()
     private var currentEntries = emptyList<AttendanceMarkEntry>()
     private var editDate: String? = null
+    private var serverStudentsForClass: String = ""
+    private var loadingServerStudents = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -208,7 +210,42 @@ class AttendanceActivity : BaseActivity() {
         historyButton.visibility = View.VISIBLE
         editButton.visibility = View.VISIBLE
         backToClassesButton.visibility = View.VISIBLE
-        classStudents = SchoolRepository.studentsForClass(selectedClass)
+        // Keep the original attendance layout, but use the real server class
+        // roster for the actual save.  Search and redraw operations reuse this
+        // one result instead of making a request on every keystroke.
+        if (serverStudentsForClass != selectedClass && !loadingServerStudents) {
+            loadingServerStudents = true
+            val requestedClass = selectedClass
+            summaryText.text = "$requestedClass - Loading students…"
+            MobileAcademicGateway.staffClassStudents(requestedClass) { result ->
+                runOnUiThread {
+                    loadingServerStudents = false
+                    result.onSuccess { students ->
+                        if (selectedClass != requestedClass) {
+                            refreshAttendanceEntries()
+                            return@onSuccess
+                        }
+                        serverStudentsForClass = requestedClass
+                        classStudents = students.map {
+                            StudentProfile(
+                                username = it.username,
+                                fullName = it.fullName,
+                                className = requestedClass,
+                                rollNumber = it.rollNumber,
+                                guardianContact = "",
+                                notes = ""
+                            )
+                        }
+                        refreshAttendanceEntries()
+                    }.onFailure { error ->
+                        saveButton.isEnabled = false
+                        summaryText.text = error.message ?: "Student records could not be loaded."
+                    }
+                }
+            }
+            return
+        }
+        if (serverStudentsForClass != selectedClass) return
         filteredStudents = classStudents.filter {
             it.fullName.contains(query, true) ||
                 it.username.contains(query, true) ||

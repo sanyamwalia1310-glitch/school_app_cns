@@ -365,7 +365,23 @@ class GradeEntryActivity : BaseActivity() {
             return
         }
 
-        submitButton?.isEnabled = false
+        val user = SessionManager.currentUser
+        val savedLocally = user != null && SchoolRepository.addMark(
+            user, profile.username, profile.fullName, subject, obtained, total, assessment
+        )
+        if (savedLocally) {
+            serverSavedMarks.removeAll {
+                it.studentUsername.equals(profile.username, true) &&
+                    it.subject.equals(subject, true) && it.assessment.equals(assessment, true)
+            }
+            serverSavedMarks.add(MarkItem(profile.username, profile.fullName, subject, obtained, total, assessment))
+            formDirty = false
+            Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
+            bindHistory()
+            bindAssessmentState()
+        } else {
+            submitButton?.isEnabled = false
+        }
         MobileAcademicGateway.saveMark(
             studentUsername = profile.username,
             className = profile.className,
@@ -375,7 +391,7 @@ class GradeEntryActivity : BaseActivity() {
             outOf = total
         ) { result ->
             runOnUiThread {
-                submitButton?.isEnabled = true
+                if (!savedLocally) submitButton?.isEnabled = true
                 result.onSuccess {
                     serverSavedMarks.removeAll {
                         it.studentUsername.equals(profile.username, true) &&
@@ -384,15 +400,21 @@ class GradeEntryActivity : BaseActivity() {
                     serverSavedMarks.add(MarkItem(profile.username, profile.fullName, subject, obtained, total, assessment))
                     SchoolRepository.refreshPrivateAcademicContent { }
                     formDirty = false
-                    Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
-                    bindHistory()
-                    bindAssessmentState()
+                    if (!savedLocally) {
+                        Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
+                        bindHistory()
+                        bindAssessmentState()
+                    }
                 }.onFailure { error ->
-                    val user = SessionManager.currentUser
-                    val savedLocally = user != null && SchoolRepository.addMark(
-                        user, profile.username, profile.fullName, subject, obtained, total, assessment
-                    )
                     if (savedLocally) {
+                        // Already saved locally; the slower server retry is
+                        // deliberately silent so the button remains instant.
+                    } else {
+                        val retryUser = SessionManager.currentUser
+                        val savedOnRetry = retryUser != null && SchoolRepository.addMark(
+                            retryUser, profile.username, profile.fullName, subject, obtained, total, assessment
+                        )
+                        if (savedOnRetry) {
                         serverSavedMarks.removeAll {
                             it.studentUsername.equals(profile.username, true) &&
                                 it.subject.equals(subject, true) && it.assessment.equals(assessment, true)
@@ -402,8 +424,9 @@ class GradeEntryActivity : BaseActivity() {
                         Toast.makeText(this, "Grades saved for ${profile.fullName}", Toast.LENGTH_SHORT).show()
                         bindHistory()
                         bindAssessmentState()
-                    } else {
-                        Toast.makeText(this, error.message ?: "Marks could not be saved.", Toast.LENGTH_LONG).show()
+                        } else {
+                            Toast.makeText(this, error.message ?: "Marks could not be saved.", Toast.LENGTH_LONG).show()
+                        }
                     }
                 }
             }

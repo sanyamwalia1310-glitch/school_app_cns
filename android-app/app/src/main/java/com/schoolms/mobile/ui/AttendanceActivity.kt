@@ -318,39 +318,33 @@ class AttendanceActivity : BaseActivity() {
         attendanceDate: String,
         successSuffix: String
     ) {
-        saveButton.isEnabled = false
+        // Save locally first. SharedPreferences updates immediately and the
+        // Firestore sync runs independently, so staff never wait for Render
+        // before the daily register responds.
+        val localSavedCount = if (attendanceDate.isBlank()) {
+            SchoolRepository.markDailyAttendanceBatch(user, selectedClass, marks)
+        } else {
+            SchoolRepository.updateDailyAttendanceBatch(user, selectedClass, attendanceDate, marks)
+        }
+        if (localSavedCount > 0) {
+            editDate = null
+            marksMap.clear()
+            Toast.makeText(this, "$localSavedCount $successSuffix", Toast.LENGTH_SHORT).show()
+            refreshAttendanceEntries()
+        }
         MobileAcademicGateway.saveAttendance(selectedClass, marks, attendanceDate) { result ->
             runOnUiThread {
-                saveButton.isEnabled = true
                 result.onSuccess { savedCount ->
                     SchoolRepository.cacheServerAttendanceBatch(
                         selectedClass,
                         marks,
                         attendanceDate.ifBlank { java.time.LocalDate.now().toString() }
                     )
-                    Toast.makeText(this, "$savedCount $successSuffix", Toast.LENGTH_SHORT).show()
-                    editDate = null
-                    marksMap.clear()
                     SchoolRepository.refreshPrivateAcademicContent { }
-                    refreshAttendanceEntries()
                 }.onFailure { error ->
-                    // Keep the daily register usable when an older hosted
-                    // server still has an incomplete roster.  This writes the
-                    // same class/day record to the shared school data and the
-                    // server can reconcile it on its next successful save.
-                    val savedCount = if (attendanceDate.isBlank()) {
-                        SchoolRepository.markDailyAttendanceBatch(user, selectedClass, marks)
-                    } else {
-                        SchoolRepository.updateDailyAttendanceBatch(user, selectedClass, attendanceDate, marks)
-                    }
-                    if (savedCount > 0) {
-                        editDate = null
-                        marksMap.clear()
-                        Toast.makeText(this, "$savedCount $successSuffix", Toast.LENGTH_SHORT).show()
-                    } else {
+                    if (localSavedCount == 0) {
                         Toast.makeText(this, error.message ?: "Attendance could not be saved.", Toast.LENGTH_LONG).show()
                     }
-                    refreshAttendanceEntries()
                 }
             }
         }

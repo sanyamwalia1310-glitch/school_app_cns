@@ -123,6 +123,8 @@ def init_db():
             email TEXT,
             address TEXT,
             guardian_name TEXT,
+            phone TEXT,
+            notes TEXT NOT NULL DEFAULT '',
             login_user_id INTEGER UNIQUE,
             registration_completed INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (class_id) REFERENCES classes(id),
@@ -622,7 +624,6 @@ def migrate_db():
             )
             """
         )
-
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS mobile_otp_sessions (
@@ -659,6 +660,8 @@ def migrate_db():
                 email TEXT,
                 address TEXT,
                 guardian_name TEXT,
+                phone TEXT,
+                notes TEXT NOT NULL DEFAULT '',
                 login_user_id INTEGER UNIQUE,
                 registration_completed INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (class_id) REFERENCES classes(id),
@@ -666,6 +669,11 @@ def migrate_db():
             )
             """
         )
+        master_columns = {row[1] for row in conn.execute("PRAGMA table_info(student_master_records)")}
+        if "phone" not in master_columns:
+            conn.execute("ALTER TABLE student_master_records ADD COLUMN phone TEXT")
+        if "notes" not in master_columns:
+            conn.execute("ALTER TABLE student_master_records ADD COLUMN notes TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS teacher_master_records (

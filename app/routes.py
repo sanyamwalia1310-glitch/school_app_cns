@@ -159,6 +159,12 @@ def self_registration_master_record(payload):
         raise MobileOtpApiError(str(error)) from error
     if get_db().execute("SELECT 1 FROM users WHERE phone = ?", (phone,)).fetchone():
         raise MobileOtpApiError("This mobile number is already registered to another school account.")
+    # New server-created master records retain the verified guardian mobile.
+    # Keep legacy records without this column value usable, but never let a
+    # different phone activate a newly provisioned student account.
+    master_phone = str(master["phone"] or "").strip() if requested_role == "student" else ""
+    if master_phone and phone != master_phone:
+        raise MobileOtpApiError("The entered mobile number does not match the student record.")
     return requested_role, master, phone
 
 
@@ -266,6 +272,7 @@ def create_email_login_from_master(db, role, master, email, firebase_uid):
     table = "student_master_records" if role == "student" else "teacher_master_records"
     id_column = "student_id" if role == "student" else "teacher_id"
     master = _restore_pending_master_record(db, table, id_column, master)
+    master_phone = master["phone"] if role == "student" else None
     existing_user = db.execute(
         "SELECT * FROM users WHERE username = ?", (master[id_column],)
     ).fetchone()
@@ -274,24 +281,24 @@ def create_email_login_from_master(db, role, master, email, firebase_uid):
         # attempt.  Keeping its ID avoids breaking any non-sensitive references.
         db.execute(
             """UPDATE users
-            SET password_hash = ?, full_name = ?, role = ?, email = ?,
+            SET password_hash = ?, full_name = ?, role = ?, email = ?, phone = ?,
                 email_verified_at = ?, firebase_uid = NULL, activated = 1
             WHERE id = ?""",
             (
                 generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role,
-                email, time.time(), existing_user["id"],
+                email, master_phone, time.time(), existing_user["id"],
             ),
         )
         user = db.execute("SELECT * FROM users WHERE id = ?", (existing_user["id"],)).fetchone()
     else:
         cursor = db.execute(
             """
-            INSERT INTO users (username, password_hash, full_name, role, email, email_verified_at, firebase_uid, activated)
-            VALUES (?, ?, ?, ?, ?, ?, ?, 1) RETURNING id
+            INSERT INTO users (username, password_hash, full_name, role, email, phone, email_verified_at, firebase_uid, activated)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1) RETURNING id
             """,
             # firebase_uid remains NULL for shared identities because the legacy column is UNIQUE.
             # The dedicated mapping table below is the authoritative link for all new registrations.
-            (master[id_column], generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role, email, time.time(), None),
+            (master[id_column], generate_password_hash(secrets.token_urlsafe(32)), master["full_name"], role, email, master_phone, time.time(), None),
         )
         user = db.execute("SELECT * FROM users WHERE id = ?", (cursor.fetchone()["id"],)).fetchone()
 
@@ -309,7 +316,7 @@ def create_email_login_from_master(db, role, master, email, firebase_uid):
                 class_id = EXCLUDED.class_id, roll_no = EXCLUDED.roll_no,
                 email = EXCLUDED.email, phone = EXCLUDED.phone,
                 address = EXCLUDED.address, guardian_name = EXCLUDED.guardian_name""",
-            (user["id"], master["class_id"], master["roll_no"], email, None, master["address"], master["guardian_name"]),
+            (user["id"], master["class_id"], master["roll_no"], email, master["phone"], master["address"], master["guardian_name"]),
         )
     db.execute(f"UPDATE {table} SET login_user_id = ?, registration_completed = 1 WHERE id = ?", (user["id"], master["id"]))
     return user
@@ -559,6 +566,75 @@ def mobile_class_by_name(db, class_name):
     return matches[0]
 
 
+def mobile_student_record_payload(db, record):
+    """Return the non-secret, canonical student representation for mobile caches."""
+    school_class = db.execute("SELECT name, section FROM classes WHERE id = ?", (record["class_id"],)).fetchone()
+    class_name = ""
+    if school_class:
+        class_name = school_class["name"]
+        if str(school_class["section"] or "").strip():
+            class_name += f" - {school_class['section']}"
+    return {
+        "id": record["id"], "student_id": record["student_id"], "full_name": record["full_name"],
+        "class_id": record["class_id"], "class_name": class_name, "roll_no": record["roll_no"] or "",
+        "guardian_name": record["guardian_name"] or "", "phone": record["phone"] or "",
+        "notes": record["notes"] or "", "email": record["email"] or "",
+        "registration_completed": bool(record["registration_completed"]), "login_user_id": record["login_user_id"],
+    }
+
+
+def create_or_repair_mobile_student(db, payload):
+    """Create exactly one pending master record, or safely resume an incomplete one."""
+    student_id = str(payload.get("student_id", "")).strip().lower()
+    full_name = str(payload.get("full_name", "")).strip()
+    roll_no = str(payload.get("roll_no", "")).strip()
+    guardian_name = str(payload.get("guardian_name", "")).strip()
+    notes = str(payload.get("notes", "")).strip()
+    email_value = str(payload.get("email", "")).strip()
+    if not student_id or len(student_id) > 120 or any(char.isspace() for char in student_id):
+        raise MobileOtpApiError("Enter a valid student ID without spaces.")
+    if not full_name or len(full_name) > 160:
+        raise MobileOtpApiError("Enter the student name.")
+    try:
+        phone = normalize_indian_phone(str(payload.get("phone", "")))
+    except TwoFactorOtpError as error:
+        raise MobileOtpApiError(str(error)) from error
+    email = normalize_email(email_value) if email_value else None
+    school_class = mobile_class_by_name(db, payload.get("class_name"))
+
+    existing = db.execute(
+        "SELECT * FROM student_master_records WHERE LOWER(student_id) = LOWER(?)", (student_id,)
+    ).fetchone()
+    named_user = db.execute("SELECT id, activated FROM users WHERE LOWER(username) = LOWER(?)", (student_id,)).fetchone()
+    if named_user and int(named_user["activated"] or 0) == 1 and not existing:
+        raise MobileOtpApiError("This student ID already has an activated school account.", status_code=409)
+
+    created = existing is None
+    repaired = False
+    if existing:
+        if _master_has_activated_login(db, existing, "student_id"):
+            raise MobileOtpApiError("This student already has an activated school account. Edit it through the server-managed profile flow.", status_code=409)
+        existing = _restore_pending_master_record(db, "student_master_records", "student_id", existing)
+        repaired = existing["class_id"] is None or not str(existing["phone"] or "").strip()
+        db.execute(
+            """UPDATE student_master_records
+            SET full_name = ?, class_id = ?, roll_no = ?, email = ?, guardian_name = ?, phone = ?, notes = ?,
+                login_user_id = NULL, registration_completed = 0 WHERE id = ?""",
+            (full_name, school_class["id"], roll_no or None, email, guardian_name or None, phone, notes, existing["id"]),
+        )
+        record_id = existing["id"]
+    else:
+        cursor = db.execute(
+            """INSERT INTO student_master_records
+            (student_id, full_name, class_id, roll_no, email, guardian_name, phone, notes, registration_completed)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0) RETURNING id""",
+            (student_id, full_name, school_class["id"], roll_no or None, email, guardian_name or None, phone, notes),
+        )
+        record_id = cursor.fetchone()["id"]
+    record = db.execute("SELECT * FROM student_master_records WHERE id = ?", (record_id,)).fetchone()
+    return mobile_student_record_payload(db, record), created, repaired
+
+
 def mobile_subject_for_class(db, class_id, subject_name=""):
     """Resolve a subject from the server-owned class/subject assignment."""
     value = str(subject_name or "").strip()
@@ -612,55 +688,8 @@ def mobile_roster_class_key(value):
 
 
 def reconcile_mobile_shared_roster_class(db, school_class):
-    """Repair legacy Firestore roster enrollment before a staff academic save.
-
-    Older Android releases stored their approved roster in
-    ``shared_state/schoolhub`` while academic saves are protected by the
-    PostgreSQL master roster.  Keeping this small bridge on the server means a
-    restored learner cannot be rejected simply because a hosted database was
-    provisioned after the Android roster.
-    """
-    try:
-        from firebase_admin import firestore
-
-        document = firestore.client().collection("shared_state").document("schoolhub").get().to_dict() or {}
-        raw_profiles = document.get("profiles", "[]")
-        profiles = json.loads(raw_profiles) if isinstance(raw_profiles, str) else []
-        if not isinstance(profiles, list):
-            return
-    except Exception as error:
-        current_app.logger.warning("Could not read the legacy Android roster: %s", type(error).__name__)
-        return
-
-    expected_class = mobile_roster_class_key(
-        f"{school_class['name']} {school_class['section'] or ''}"
-    )
-    for profile in profiles:
-        if not isinstance(profile, dict) or mobile_roster_class_key(profile.get("className")) != expected_class:
-            continue
-        student_id = str(profile.get("username", "")).strip()
-        full_name = str(profile.get("fullName", "")).strip() or student_id
-        if not student_id:
-            continue
-        record = db.execute(
-            "SELECT id, class_id FROM student_master_records WHERE LOWER(student_id) = LOWER(?)",
-            (student_id,),
-        ).fetchone()
-        roll_no = str(profile.get("rollNumber", "")).strip() or None
-        guardian_name = str(profile.get("guardianContact", "")).strip() or None
-        if record:
-            if record["class_id"] != school_class["id"]:
-                db.execute(
-                    "UPDATE student_master_records SET class_id = ?, roll_no = COALESCE(NULLIF(roll_no, ''), ?), guardian_name = COALESCE(NULLIF(guardian_name, ''), ?) WHERE id = ?",
-                    (school_class["id"], roll_no, guardian_name, record["id"]),
-                )
-        else:
-            db.execute(
-                """INSERT INTO student_master_records
-                (student_id, full_name, class_id, roll_no, guardian_name, registration_completed)
-                VALUES (?, ?, ?, ?, ?, 0)""",
-                (student_id, full_name, school_class["id"], roll_no, guardian_name),
-            )
+    """Removed legacy bridge; PostgreSQL master records are the only academic roster."""
+    return None
 
 
 def require_mobile_staff_class_access(db, actor, class_id):
@@ -1202,52 +1231,55 @@ def register_mobile_fcm_token():
         return jsonify(error=str(error)), 403
 
 
-@main.route("/api/mobile/admin/student-master-record", methods=["POST"])
-def upsert_mobile_student_master_record():
-    """Create or update an unregistered student master record from the Android admin screen.
+@main.route("/api/mobile/admin/students", methods=["POST"])
+def create_mobile_student():
+    """Create or resume one student only after Flask authorizes an admin profile."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        db = get_db()
+        mobile_profile_from_payload(payload, "admin")
+        student, created, repaired = create_or_repair_mobile_student(db, payload)
+        db.commit()
+        return jsonify(
+            message="Student record created." if created else "Incomplete student record repaired." if repaired else "Student record already exists.",
+            student=student, created=created, repaired=repaired,
+        ), 201 if created else 200
+    except (MobileOtpApiError, ValueError) as error:
+        get_db().rollback()
+        return jsonify(error=str(error)), getattr(error, "status_code", 400)
+    except FirebaseAuthProvisioningError as error:
+        get_db().rollback()
+        return jsonify(error=str(error)), 403
 
-    The Firebase admin claim is verified on Flask.  Email is retained only in the private
-    server-side master record, never copied to public Firestore content.
+
+@main.route("/api/mobile/admin/student-master-record", methods=["POST"])
+def deprecated_mobile_student_master_record():
+    """Compatibility endpoint for editing an existing master row only.
+
+    It deliberately cannot create a row: old APKs therefore cannot reproduce the
+    old partial-create bug, while their existing-record edit screen keeps working
+    until it is migrated to the profile-scoped endpoint.
     """
     payload = request.get_json(silent=True) or {}
     try:
         verified_firebase_admin_uid(str(payload.get("firebase_id_token", "")).strip())
         student_id = str(payload.get("student_id", "")).strip()
         full_name = str(payload.get("full_name", "")).strip()
-        roll_no = str(payload.get("roll_no", "")).strip()
-        guardian_name = str(payload.get("guardian_name", "")).strip()
+        if not student_id or not full_name:
+            raise MobileOtpApiError("Enter a valid student ID and student name.")
         email_value = str(payload.get("email", "")).strip()
-        if not student_id or len(student_id) > 120 or any(char.isspace() for char in student_id):
-            raise MobileOtpApiError("Enter a valid student ID.")
-        if not full_name or len(full_name) > 160:
-            raise MobileOtpApiError("Enter the student name.")
         email = normalize_email(email_value) if email_value else None
-
         db = get_db()
-        existing = db.execute("SELECT * FROM student_master_records WHERE student_id = ?", (student_id,)).fetchone()
-        if existing:
-            try:
-                existing = _restore_pending_master_record(
-                    db, "student_master_records", "student_id", existing
-                )
-            except MobileOtpApiError as error:
-                raise MobileOtpApiError("This student already has an activated account.", status_code=409) from error
-        if existing:
-            db.execute(
-                """UPDATE student_master_records
-                SET full_name = ?, roll_no = ?, email = ?, guardian_name = ? WHERE id = ?""",
-                (full_name, roll_no or None, email, guardian_name or None, existing["id"]),
-            )
-            record_id = existing["id"]
-        else:
-            cursor = db.execute(
-                """INSERT INTO student_master_records (student_id, full_name, roll_no, email, guardian_name)
-                VALUES (?, ?, ?, ?, ?) RETURNING id""",
-                (student_id, full_name, roll_no or None, email, guardian_name or None),
-            )
-            record_id = cursor.fetchone()["id"]
+        existing = db.execute("SELECT id FROM student_master_records WHERE LOWER(student_id) = LOWER(?)", (student_id,)).fetchone()
+        if not existing:
+            raise MobileOtpApiError("Update the SchoolMS app before creating new students.", status_code=410)
+        db.execute(
+            """UPDATE student_master_records SET full_name = ?, roll_no = ?, email = ?, guardian_name = ? WHERE id = ?""",
+            (full_name, str(payload.get("roll_no", "")).strip() or None, email,
+             str(payload.get("guardian_name", "")).strip() or None, existing["id"]),
+        )
         db.commit()
-        return jsonify(message="Student master record saved.", master_record_id=record_id)
+        return jsonify(message="Existing student master record updated.")
     except MobileOtpApiError as error:
         get_db().rollback()
         return jsonify(error=str(error)), error.status_code
@@ -1506,6 +1538,26 @@ def mobile_staff_class_students():
         return jsonify(error=str(error)), 403
 
 
+@main.route("/api/mobile/staff/students", methods=["POST"])
+def mobile_staff_students():
+    """Return the Flask/PostgreSQL roster used to refresh Android's student cache."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        query = """SELECT sm.* FROM student_master_records sm
+            JOIN classes c ON c.id = sm.class_id"""
+        params = ()
+        if actor["role"] == "teacher":
+            query += " WHERE c.teacher_id = ?"
+            params = (actor["id"],)
+        query += " ORDER BY c.name, c.section, sm.roll_no, sm.full_name, sm.student_id"
+        rows = db.execute(query, params).fetchall()
+        return jsonify(items=[mobile_student_record_payload(db, row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
 @main.route("/api/mobile/marks", methods=["POST"])
 def save_mobile_marks():
     """Save marks server-side and notify only the affected student profile."""
@@ -1515,7 +1567,6 @@ def save_mobile_marks():
         db = get_db()
         school_class = mobile_class_by_name(db, payload.get("class_name"))
         require_mobile_staff_class_access(db, actor, school_class["id"])
-        reconcile_mobile_shared_roster_class(db, school_class)
         subject = mobile_subject_for_class(db, school_class["id"], payload.get("subject_name"))
         username = str(payload.get("student_username", "")).strip()
         student = master_student_in_class(db, username, school_class["id"])
@@ -1560,7 +1611,6 @@ def save_mobile_attendance():
         db = get_db()
         school_class = mobile_class_by_name(db, payload.get("class_name"))
         require_mobile_staff_class_access(db, actor, school_class["id"])
-        reconcile_mobile_shared_roster_class(db, school_class)
         subject = mobile_daily_attendance_subject(db, school_class["id"])
         attendance_date = str(payload.get("attendance_date") or date.today().isoformat()).strip()
         date.fromisoformat(attendance_date)

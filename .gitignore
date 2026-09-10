@@ -29,6 +29,7 @@ app/uploads/
 *.db
 *.sqlite
 *.sqlite3
+backups/*.json
 
 # Generated IDE and build artifacts
 .gradle/

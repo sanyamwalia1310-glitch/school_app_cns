@@ -189,14 +189,23 @@ class HomeworkActivity : BaseActivity() {
             it.title.contains(query, true) || it.className.contains(query, true) || it.description.contains(query, true)
         }
         currentStudentHomework = studentHomework
-        adapter.updateItems(studentHomework.map {
+        val rows = studentHomework.map {
             val ownSubmission = it.submissions.firstOrNull { submission -> submission.studentUsername == user.username }
             SimpleListItem(
                 title = "${it.title} (${it.subject})",
-                    subtitle = "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }.ifEmpty { listOf("No file") }.joinToString()}\nMy submission: ${ownSubmission?.fileNames?.ifEmpty { listOfNotNull(ownSubmission.fileName) }?.joinToString() ?: "Pending"}",
+                subtitle = "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }.ifEmpty { listOf("No file") }.joinToString()}\nMy submission: ${ownSubmission?.fileNames?.ifEmpty { listOfNotNull(ownSubmission.fileName) }?.joinToString() ?: "Pending"}",
                 badge = it.className
             )
-        })
+        }
+        adapter.updateItems(
+            rows.ifEmpty {
+                listOf(SimpleListItem(
+                    "No homework assigned yet",
+                    "Your teacher has not assigned homework to ${user.className.ifBlank { "your class" }}.",
+                    "Clear"
+                ))
+            }
+        )
         updateStudentUploadState()
     }
 
@@ -328,6 +337,7 @@ class HomeworkActivity : BaseActivity() {
     }
 
     private fun showAddHomeworkClassPicker() {
+        if (isFinishing || isDestroyed) return
         val classes = SchoolRepository.availableClasses()
         if (classes.isEmpty()) {
             Toast.makeText(this, "No classes available", Toast.LENGTH_SHORT).show()

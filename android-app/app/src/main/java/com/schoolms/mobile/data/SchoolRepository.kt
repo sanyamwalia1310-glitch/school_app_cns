@@ -6,7 +6,6 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Patterns
 import com.google.firebase.auth.FirebaseAuth
-import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.SetOptions
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.Source
@@ -30,15 +29,14 @@ import kotlin.concurrent.thread
 
 object SchoolRepository {
     private const val PREFS = "schoolhub_prefs"
-    private const val SHARED_STATE_COLLECTION = "shared_state"
-    private const val SHARED_STATE_DOCUMENT = "schoolhub"
     // Public school-wide content is deliberately separated from account, marks, and
     // enquiry records.  Do not add private/profile keys to this document.
     private const val PUBLIC_CONTENT_COLLECTION = "public_content"
     private const val PUBLIC_CONTENT_DOCUMENT = "schoolhub"
-    private const val SHARED_STATE_FETCH_TIMEOUT_MS = 15_000L
+    private const val PUBLIC_CONTENT_REFRESH_INTERVAL_MS = 30_000L
+    private const val PUBLIC_CONTENT_FETCH_TIMEOUT_MS = 15_000L
+    private const val PRIVATE_ACADEMIC_REFRESH_INTERVAL_MS = 30_000L
     private const val PERSONAL_EVENTS_COLLECTION = "personal_events"
-    private const val PERSONAL_NOTIFICATIONS_COLLECTION = "personal_notifications"
     private const val REGISTRATION_REQUESTS_COLLECTION = "registration_requests"
     private const val PASSWORD_RESET_REQUESTS_COLLECTION = "password_reset_requests"
     private const val KEY_REGISTRATION_REQUESTS = "registration_requests_cache"
@@ -70,9 +68,10 @@ object SchoolRepository {
     private val gson = Gson()
     private lateinit var appContext: Context
     private lateinit var prefs: SharedPreferences
-    private var sharedStateListener: ListenerRegistration? = null
     private var publicContentListener: ListenerRegistration? = null
     private var hasDedicatedPublicContent = false
+    private var publicContentRefreshInFlight = false
+    private var lastPublicContentRefreshAt = 0L
     private var personalNotificationsListener: ListenerRegistration? = null
     private var isApplyingRemoteState = false
     private var isInitializing = false
@@ -89,6 +88,10 @@ object SchoolRepository {
     // These values come from Flask and are scoped to the selected Firebase profile.
     // They are deliberately not written back to the shared Firestore state.
     private var privateAcademicProfileId: Int? = null
+    private var privateAcademicProfileRestoreInFlight = false
+    private val pendingPrivateAcademicProfileCallbacks = mutableListOf<(Boolean) -> Unit>()
+    private var privateAcademicRefreshInFlightProfileId: Int? = null
+    private var lastPrivateAcademicRefreshAt = 0L
     private var privateHomeworkItems: List<HomeworkItem> = emptyList()
     private var privateTestItems: List<MobileAcademicGateway.Test> = emptyList()
     private var privateMarksItems: List<MarkItem> = emptyList()
@@ -303,7 +306,10 @@ object SchoolRepository {
         val changedKeys = dirtySharedKeys.toSet()
         dirtySharedKeys.clear()
         pushPublicContent(changedKeys.filterTo(linkedSetOf()) { it in publicContentKeys })
-        pushSharedState(pendingSyncEvent, changedKeys.filterNot { it in publicContentKeys }.toSet())
+        // Academic, profile, registration, and account data belongs to Flask/PostgreSQL.
+        // The legacy shared_state document is deliberately not written: retries against
+        // that protected document caused a persistent Firestore write loop and UI lag.
+        pendingSyncEvent?.takeIf(::shouldUsePersonalChannel)?.let { pushPersonalEvent(it) }
         pendingSyncEvent = null
         notifyDataChanged()
     }
@@ -438,28 +444,11 @@ object SchoolRepository {
             targetedNotificationItems.clear()
             targetedNotificationItems.addAll(cached)
             notifyDataChanged()
-            personalNotificationsListener = runCatching {
-                Firebase.firestore
-                    .collection(PERSONAL_NOTIFICATIONS_COLLECTION)
-                    .document(username)
-                    .addSnapshotListener { snapshot, error ->
-                        if (error != null) return@addSnapshotListener
-                        applyPersonalNotifications(username, snapshot?.getString("items_json"))
-                    }
-            }.getOrNull()
         }
-
-        if (forceRemoteRefresh) {
-            runCatching {
-                Firebase.firestore
-                    .collection(PERSONAL_NOTIFICATIONS_COLLECTION)
-                    .document(username)
-                    .get(Source.SERVER)
-                    .addOnSuccessListener { snapshot ->
-                        applyPersonalNotifications(username, snapshot.getString("items_json"))
-                    }
-            }
-        }
+        // Personal notifications are delivered by Firebase Cloud Messaging after
+        // Flask authorizes the profile.  Do not query the old username-keyed
+        // Firestore cache: real Firebase email accounts cannot safely be proven
+        // to own that username in Firestore rules.
     }
 
     private fun applyPersonalNotifications(username: String, rawJson: String?) {
@@ -604,22 +593,10 @@ object SchoolRepository {
     }
 
     private fun startSharedSync() {
-        sharedStateListener?.remove()
         publicContentListener?.remove()
-        // Keep the legacy listener during the rolling upgrade.  Once a dedicated
-        // public document exists it is never allowed to overwrite public content.
-        sharedStateListener = runCatching {
-            Firebase.firestore
-                .collection(SHARED_STATE_COLLECTION)
-                .document(SHARED_STATE_DOCUMENT)
-                .addSnapshotListener { snapshot, error ->
-                    if (error != null) return@addSnapshotListener
-                    val data = snapshot?.data
-                    if (!data.isNullOrEmpty()) {
-                        runCatching { applyRemoteState(data) }
-                    }
-                }
-        }.getOrNull()
+        // shared_state/schoolhub was a legacy mixed public/private cache.  It is no
+        // longer read or written by the app; public content has its own document and
+        // private academic data is retrieved from Flask with profile authorization.
         publicContentListener = runCatching {
             Firebase.firestore
                 .collection(PUBLIC_CONTENT_COLLECTION)
@@ -636,40 +613,31 @@ object SchoolRepository {
     }
 
     fun refreshSharedStateOnce(onComplete: (Boolean) -> Unit) {
+        val now = System.currentTimeMillis()
+        if (publicContentRefreshInFlight || now - lastPublicContentRefreshAt < PUBLIC_CONTENT_REFRESH_INTERVAL_MS) {
+            onComplete(hasDedicatedPublicContent)
+            return
+        }
+        publicContentRefreshInFlight = true
         val completed = AtomicBoolean(false)
         val timeoutHandler = Handler(Looper.getMainLooper())
-        val timeout = Runnable { completeRefresh(completed, timeoutHandler, onComplete, false) }
-        timeoutHandler.postDelayed(timeout, SHARED_STATE_FETCH_TIMEOUT_MS)
-
-        fun completeAfterLegacySnapshot(snapshot: DocumentSnapshot) {
-            val data = snapshot.data
-            val success = if (!data.isNullOrEmpty()) runCatching { applyRemoteState(data) }.isSuccess else false
+        timeoutHandler.postDelayed(
+            { completeRefresh(completed, timeoutHandler, onComplete, false) },
+            PUBLIC_CONTENT_FETCH_TIMEOUT_MS
+        )
+        runCatching {
             Firebase.firestore
                 .collection(PUBLIC_CONTENT_COLLECTION)
                 .document(PUBLIC_CONTENT_DOCUMENT)
                 .get(Source.SERVER)
-                .addOnSuccessListener { publicSnapshot ->
-                    publicSnapshot.data?.takeIf { it.isNotEmpty() }?.let {
+                .addOnSuccessListener { snapshot ->
+                    val success = snapshot.data?.takeIf { it.isNotEmpty() }?.let {
                         hasDedicatedPublicContent = true
-                        runCatching { applyRemotePublicContent(it) }
-                    }
+                        runCatching { applyRemotePublicContent(it) }.isSuccess
+                    } ?: false
                     completeRefresh(completed, timeoutHandler, onComplete, success)
                 }
-                .addOnFailureListener { completeRefresh(completed, timeoutHandler, onComplete, success) }
-        }
-
-        runCatching {
-            val document = Firebase.firestore
-                .collection(SHARED_STATE_COLLECTION)
-                .document(SHARED_STATE_DOCUMENT)
-
-            document.get(Source.SERVER)
-                .addOnSuccessListener(::completeAfterLegacySnapshot)
-                .addOnFailureListener {
-                    document.get()
-                        .addOnSuccessListener(::completeAfterLegacySnapshot)
-                        .addOnFailureListener { completeRefresh(completed, timeoutHandler, onComplete, false) }
-                }
+                .addOnFailureListener { completeRefresh(completed, timeoutHandler, onComplete, false) }
         }.onFailure {
             completeRefresh(completed, timeoutHandler, onComplete, false)
         }
@@ -683,6 +651,8 @@ object SchoolRepository {
     ) {
         if (completed.compareAndSet(false, true)) {
             timeoutHandler.removeCallbacksAndMessages(null)
+            publicContentRefreshInFlight = false
+            lastPublicContentRefreshAt = System.currentTimeMillis()
             onComplete(success)
         }
     }
@@ -1049,18 +1019,10 @@ object SchoolRepository {
             pushPersonalEvent(event, onComplete)
             return
         }
-        Firebase.firestore
-            .collection(SHARED_STATE_COLLECTION)
-            .document(SHARED_STATE_DOCUMENT)
-            .set(
-                mapOf(
-                    "last_event" to gson.toJson(event),
-                    "updatedAt" to System.currentTimeMillis()
-                ),
-                SetOptions.merge()
-            )
-            .addOnSuccessListener { onComplete(true) }
-            .addOnFailureListener { onComplete(false) }
+        // Global legacy events used shared_state/schoolhub.  Do not fall back to
+        // that mixed-access document; a caller that needs a global notification
+        // must use the server-authorized notification API instead.
+        onComplete(false)
     }
 
     private fun pushPersonalEvent(event: SyncEvent, onComplete: (Boolean) -> Unit = {}) {
@@ -1070,26 +1032,6 @@ object SchoolRepository {
             .set(event)
             .addOnSuccessListener { onComplete(true) }
             .addOnFailureListener { onComplete(false) }
-    }
-
-    private fun pushSharedState(syncEvent: SyncEvent? = null, changedKeys: Set<String> = emptySet()) {
-        val payload = mutableMapOf<String, Any>()
-        changedKeys.forEach { key ->
-            sharedStateValueForKey(key)?.let { payload[key] = it }
-        }
-        if (syncEvent != null && !shouldUsePersonalChannel(syncEvent)) {
-            payload["last_event"] = gson.toJson(syncEvent)
-        }
-        if (payload.isNotEmpty()) {
-            payload["updatedAt"] = System.currentTimeMillis()
-            runCatching {
-                Firebase.firestore
-                    .collection(SHARED_STATE_COLLECTION)
-                    .document(SHARED_STATE_DOCUMENT)
-                    .set(payload, SetOptions.merge())
-            }
-        }
-        syncEvent?.takeIf(::shouldUsePersonalChannel)?.let { pushPersonalEvent(it) }
     }
 
     /**
@@ -3251,23 +3193,53 @@ object SchoolRepository {
 
     /** Refresh private academic data from Flask for the active school profile. */
     fun refreshPrivateAcademicContent(onComplete: (Boolean) -> Unit = {}) {
-        val profileId = SessionManager.activeProfileId ?: return onComplete(false)
         val user = SessionManager.currentUser ?: return onComplete(false)
+        val profileId = SessionManager.activeProfileId ?: run {
+            restoreSingleAuthorizedAcademicProfile(user, onComplete)
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (privateAcademicRefreshInFlightProfileId == profileId) {
+            onComplete(false)
+            return
+        }
+        if (privateAcademicProfileId == profileId &&
+            now - lastPrivateAcademicRefreshAt < PRIVATE_ACADEMIC_REFRESH_INTERVAL_MS) {
+            onComplete(true)
+            return
+        }
+        if (privateAcademicProfileId != profileId) {
+            // Never display a previously selected profile's records while the
+            // newly selected profile is loading.
+            privateAcademicProfileId = null
+            privateHomeworkItems = emptyList()
+            privateTestItems = emptyList()
+            privateMarksItems = emptyList()
+            privateAttendanceItems = emptyList()
+        }
+        privateAcademicRefreshInFlightProfileId = profileId
         val pending = AtomicInteger(if (user.role == Role.STUDENT) 4 else 2)
         var success = true
+        val homeworkLoaded = AtomicBoolean(false)
         fun finish(result: Boolean) {
             success = success && result
             if (pending.decrementAndGet() == 0) {
                 Handler(Looper.getMainLooper()).post {
-                    if (privateAcademicProfileId == profileId) notifyDataChanged()
-                    onComplete(success)
+                    if (privateAcademicRefreshInFlightProfileId == profileId) {
+                        privateAcademicRefreshInFlightProfileId = null
+                        lastPrivateAcademicRefreshAt = System.currentTimeMillis()
+                        if (homeworkLoaded.get() && SessionManager.activeProfileId == profileId) {
+                            privateAcademicProfileId = profileId
+                        }
+                        notifyDataChanged()
+                    }
+                    onComplete(success && homeworkLoaded.get())
                 }
             }
         }
-        privateAcademicProfileId = profileId
         MobileAcademicGateway.homework { result ->
             result.onSuccess { rows ->
-                if (privateAcademicProfileId == profileId) {
+                if (SessionManager.activeProfileId == profileId) {
                     privateHomeworkItems = rows.map { row ->
                         HomeworkItem(
                             id = row.id, className = row.className, subject = row.subject,
@@ -3279,18 +3251,19 @@ object SchoolRepository {
                             attachmentIds = row.attachments.map { it.id }
                         )
                     }
+                    homeworkLoaded.set(true)
                 }
             }
             finish(result.isSuccess)
         }
         MobileAcademicGateway.tests { result ->
-            result.onSuccess { if (privateAcademicProfileId == profileId) privateTestItems = it }
+            result.onSuccess { if (SessionManager.activeProfileId == profileId) privateTestItems = it }
             finish(result.isSuccess)
         }
         if (user.role != Role.STUDENT) return
         MobileAcademicGateway.marks { result ->
             result.onSuccess { rows ->
-                if (privateAcademicProfileId == profileId) {
+                if (SessionManager.activeProfileId == profileId) {
                     privateMarksItems = rows.map { row ->
                         MarkItem(user.username, user.fullName, row.subject, row.score, row.outOf, row.assessment)
                     }
@@ -3300,7 +3273,7 @@ object SchoolRepository {
         }
         MobileAcademicGateway.attendance { result ->
             result.onSuccess { rows ->
-                if (privateAcademicProfileId == profileId) {
+                if (SessionManager.activeProfileId == profileId) {
                     privateAttendanceItems = rows.map { row ->
                         DailyAttendanceMark(user.username, row.className, row.date, row.present, row.subject)
                     }
@@ -3308,6 +3281,46 @@ object SchoolRepository {
             }
             finish(result.isSuccess)
         }
+    }
+
+    /**
+     * Session metadata deliberately does not persist a Flask profile ID.  On a
+     * restart, recover it only when the server confirms there is exactly one
+     * profile linked to this Firebase account.  Shared accounts must still choose
+     * a profile explicitly at sign-in.
+     */
+    private fun restoreSingleAuthorizedAcademicProfile(user: User, onComplete: (Boolean) -> Unit) {
+        pendingPrivateAcademicProfileCallbacks.add(onComplete)
+        if (privateAcademicProfileRestoreInFlight) return
+        privateAcademicProfileRestoreInFlight = true
+
+        fun complete(profileId: Int?) {
+            Handler(Looper.getMainLooper()).post {
+                privateAcademicProfileRestoreInFlight = false
+                val callbacks = pendingPrivateAcademicProfileCallbacks.toList()
+                pendingPrivateAcademicProfileCallbacks.clear()
+                if (profileId == null) {
+                    callbacks.forEach { it(false) }
+                    return@post
+                }
+                SessionManager.selectAuthorizedProfile(profileId)
+                refreshPrivateAcademicContent { success -> callbacks.forEach { it(success) } }
+            }
+        }
+
+        val firebaseUser = FirebaseAuth.getInstance().currentUser ?: return complete(null)
+        firebaseUser.getIdToken(false)
+            .addOnSuccessListener { tokenResult ->
+                val token = tokenResult.token.orEmpty()
+                if (token.isBlank()) return@addOnSuccessListener complete(null)
+                FlaskEmailGateway.linkedProfiles(token, user.username) { profilesResult ->
+                    val profile = profilesResult.getOrNull()?.singleOrNull() ?: return@linkedProfiles complete(null)
+                    FlaskEmailGateway.selectProfile(token, profile.id) { selected ->
+                        complete(profile.id.takeIf { selected.isSuccess })
+                    }
+                }
+            }
+            .addOnFailureListener { complete(null) }
     }
 
     fun privateTestsForActiveProfile(): List<MobileAcademicGateway.Test> =

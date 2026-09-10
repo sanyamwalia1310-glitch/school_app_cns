@@ -2044,6 +2044,25 @@ object SchoolRepository {
     fun userByUsername(username: String): User? =
         resolvedUsers().firstOrNull { it.username.equals(username.trim(), ignoreCase = true) }
 
+    /** Cache a profile that Flask has just authorized for this Firebase login.
+     * This deliberately persists locally only and never writes user data to
+     * legacy Firestore shared_state/schoolhub. */
+    fun cacheAuthorizedProfile(profile: User) {
+        val username = profile.username.trim().lowercase()
+        if (username.isBlank()) return
+        deletedAccountUsernames.remove(username)
+        deletedStudentUsernames.remove(username)
+        approvedAccountUsernames.add(username)
+        users.removeAll { it.username.equals(username, ignoreCase = true) }
+        users.add(profile.copy(username = username, password = "", approved = true))
+        deduplicateUsers()
+        persistValue("users", users)
+        persistValue(KEY_APPROVED_ACCOUNTS, approvedAccountUsernames)
+        persistValue(KEY_DELETED_ACCOUNTS, deletedAccountUsernames)
+        persistValue(KEY_DELETED_STUDENTS, deletedStudentUsernames)
+        notifyDataChanged()
+    }
+
     fun isUsernameUnavailable(username: String, originalUsername: String = ""): Boolean {
         val normalizedUsername = username.trim().lowercase()
         val normalizedOriginal = originalUsername.trim().lowercase()
@@ -4496,8 +4515,59 @@ object SchoolRepository {
         return users.firstOrNull { it.username == normalizedUsername }
     }
 
+    /**
+     * Student rosters are server-owned. This is a cache for presentation only;
+     * unlike the legacy add/update routines it never writes profiles to Firestore.
+     */
+    fun cacheServerStudentProfiles(records: List<MobileAcademicGateway.ManagedStudent>) {
+        if (records.isEmpty()) return
+        val serverClasses = records.map { it.className }.filter { it.isNotBlank() }.toSet()
+        studentProfiles.removeAll { it.className in serverClasses }
+        records.forEach { record ->
+            val username = record.username.trim().lowercase()
+            if (username.isBlank()) return@forEach
+            deletedStudentUsernames.remove(username)
+            deletedAccountUsernames.remove(username)
+            studentProfiles.add(
+                StudentProfile(
+                    username = username,
+                    fullName = record.fullName,
+                    className = record.className,
+                    rollNumber = record.rollNumber,
+                    guardianContact = record.guardianContact,
+                    notes = record.notes,
+                    email = record.email,
+                )
+            )
+        }
+        // Persist locally without save()/runSharedUpdate(): private roster data
+        // must not be written to legacy shared_state/schoolhub.
+        persistValue("profiles", studentProfiles.distinctBy { it.username.lowercase() })
+        persistValue(KEY_DELETED_STUDENTS, deletedStudentUsernames)
+        persistValue(KEY_DELETED_ACCOUNTS, deletedAccountUsernames)
+        notifyDataChanged()
+    }
+
+    fun cacheServerStudentProfile(record: MobileAcademicGateway.ManagedStudent) {
+        val username = record.username.trim().lowercase()
+        if (username.isBlank()) return
+        deletedStudentUsernames.remove(username)
+        deletedAccountUsernames.remove(username)
+        studentProfiles.removeAll { it.username.equals(username, true) }
+        studentProfiles.add(
+            StudentProfile(
+                username = username, fullName = record.fullName, className = record.className,
+                rollNumber = record.rollNumber, guardianContact = record.guardianContact,
+                notes = record.notes, email = record.email,
+            )
+        )
+        persistValue("profiles", studentProfiles.distinctBy { it.username.lowercase() })
+        persistValue(KEY_DELETED_STUDENTS, deletedStudentUsernames)
+        persistValue(KEY_DELETED_ACCOUNTS, deletedAccountUsernames)
+        notifyDataChanged()
+    }
+
     fun allStudentProfiles(): List<StudentProfile> = studentProfiles
-        .filter { approvedStudentUsernames().contains(it.username) }
         .sortedWith(compareBy({ classOrder(it.className) }, { it.fullName }))
 
     fun profileFor(username: String): StudentProfile? = studentProfiles.firstOrNull { it.username == username }
@@ -4634,7 +4704,7 @@ object SchoolRepository {
         resolvedUsers().filter { it.role == Role.STUDENT && it.approved }.map { it.username }.toSet()
 
     fun studentsForClass(className: String): List<StudentProfile> =
-        studentProfiles.filter { it.className == className && approvedStudentUsernames().contains(it.username) }.sortedBy { it.fullName }
+        studentProfiles.filter { it.className == className }.sortedBy { it.fullName }
 
     fun teacherUsers(): List<User> =
         resolvedUsers().filter { it.role == Role.TEACHER && it.approved }.sortedWith(compareBy({ classOrder(classesFor(it).firstOrNull().orEmpty()) }, { it.fullName }))

@@ -68,7 +68,9 @@ class LoginActivity : BaseActivity() {
 
         val roles = resources.getStringArray(R.array.roles)
         roleDropdown.setAdapter(ArrayAdapter(this, android.R.layout.simple_list_item_1, roles))
-        roleDropdown.setText(roles.first(), false)
+        val prefetchedRole = intent.getStringExtra(EXTRA_PREFILLED_ROLE)
+        roleDropdown.setText(prefetchedRole?.takeIf { it in roles } ?: roles.first(), false)
+        usernameInput.setText(intent.getStringExtra(EXTRA_PREFILLED_EMAIL).orEmpty())
         roleDropdown.setOnClickListener { roleDropdown.showDropDown() }
         roleDropdown.setOnFocusChangeListener { _, hasFocus ->
             if (hasFocus) roleDropdown.showDropDown()
@@ -127,8 +129,11 @@ class LoginActivity : BaseActivity() {
                     Toast.makeText(this, "Login is taking too long. Check your internet connection and try again.", Toast.LENGTH_LONG).show()
                 }
             }, LOGIN_TIMEOUT_MS)
+            val rememberedEmail = if (username.contains("@")) null else SessionManager.rememberedEmailForSchoolId(role, username)
             if (username.contains("@")) {
                 signInSharedFirebaseEmail(username, password, attemptId)
+            } else if (rememberedEmail != null) {
+                signInSharedFirebaseEmail(rememberedEmail, password, attemptId)
             } else SessionManager.signIn(role, username, password) { result ->
                 runOnUiThread {
                     if (attemptId != loginAttemptId || !loginInProgress) return@runOnUiThread
@@ -157,18 +162,19 @@ class LoginActivity : BaseActivity() {
                 user.getIdToken(true).addOnSuccessListener { token -> FlaskEmailGateway.linkedProfiles(token.token.orEmpty()) { result -> runOnUiThread {
                     result.onSuccess { profiles ->
                         if (profiles.isEmpty()) completeSharedLogin(attemptId, Result.failure(IllegalArgumentException("No school profile is linked to this Firebase email.")))
-                        else if (profiles.size == 1) selectSharedProfile(token.token.orEmpty(), profiles.first(), attemptId)
-                        else AlertDialog.Builder(this).setTitle("Choose school profile").setItems(profiles.map { "${it.fullName} — ${it.identifier} (${it.role})" }.toTypedArray()) { _, index -> selectSharedProfile(token.token.orEmpty(), profiles[index], attemptId) }.show()
+                        else if (profiles.size == 1) selectSharedProfile(token.token.orEmpty(), profiles.first(), email, attemptId)
+                        else AlertDialog.Builder(this).setTitle("Choose school profile").setItems(profiles.map { "${it.fullName} — ${it.identifier} (${it.role})" }.toTypedArray()) { _, index -> selectSharedProfile(token.token.orEmpty(), profiles[index], email, attemptId) }.show()
                     }.onFailure { completeSharedLogin(attemptId, Result.failure(it)) }
                 } } }
             }
         }.addOnFailureListener { completeSharedLogin(attemptId, Result.failure(it)) }
     }
 
-    private fun selectSharedProfile(token: String, profile: FlaskEmailGateway.LinkedProfile, attemptId: Int) {
+    private fun selectSharedProfile(token: String, profile: FlaskEmailGateway.LinkedProfile, email: String, attemptId: Int) {
         FlaskEmailGateway.selectProfile(token, profile.id) { selected -> runOnUiThread { selected.onSuccess {
             SessionManager.selectAuthorizedProfile(profile.id)
-            SessionManager.signInLinkedFirebaseProfile(Role.fromLabel(profile.role), profile.identifier) { result ->
+            SessionManager.rememberEmailForSchoolId(Role.fromLabel(profile.role), profile.identifier, email)
+            SessionManager.signInLinkedFirebaseProfile(profile) { result ->
                 if (result.isSuccess) {
                     FirebaseMessaging.getInstance().token.addOnSuccessListener { deviceToken ->
                         FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.addOnSuccessListener { currentToken ->
@@ -349,8 +355,10 @@ class LoginActivity : BaseActivity() {
         updateCard.strokeColor = getColor(if (forceRequired) R.color.dashboard_red else R.color.stroke_soft)
     }
 
-    private companion object {
+    companion object {
         const val LOGIN_TIMEOUT_MS = 20_000L
         const val BIOMETRIC_AUTHENTICATORS = BiometricManager.Authenticators.BIOMETRIC_WEAK
+        const val EXTRA_PREFILLED_EMAIL = "login_prefilled_email"
+        const val EXTRA_PREFILLED_ROLE = "login_prefilled_role"
     }
 }

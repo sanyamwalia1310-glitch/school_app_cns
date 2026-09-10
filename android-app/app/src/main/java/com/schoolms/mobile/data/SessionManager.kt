@@ -14,6 +14,7 @@ object SessionManager {
     private const val SESSION_DURATION_MS = 8 * 60 * 60 * 1000L
     private lateinit var appContext: Context
     private lateinit var secureStore: SecureSessionStore
+    private lateinit var emailAliasStore: EmailAliasStore
 
     var currentUser: User? = null
     /** Flask profile ID, required for private FCM audience checks (UID alone is not enough). */
@@ -22,6 +23,7 @@ object SessionManager {
     fun init(context: Context) {
         appContext = context.applicationContext
         secureStore = SecureSessionStore(appContext)
+        emailAliasStore = EmailAliasStore(appContext)
         // Old releases stored the actual password here. Never migrate it.
         prefs().edit().clear().apply()
         currentUser = null
@@ -88,22 +90,49 @@ object SessionManager {
         }
     }
 
-    /** Complete Android session setup only for a profile already authorized by Flask for this UID. */
-    fun signInLinkedFirebaseProfile(role: Role, schoolId: String, onResult: (Result<User>) -> Unit) {
-        SchoolRepository.refreshSharedStateOnce {
-            val user = SchoolRepository.userByUsername(schoolId)
-            when {
-                user == null -> onResult(Result.failure(IllegalArgumentException("This linked school profile is not available on this device yet.")))
-                user.role != role || !user.approved -> onResult(Result.failure(IllegalArgumentException("This profile is not approved for the selected role.")))
-                else -> finishLogin(user, "", onResult)
-            }
+    /**
+     * Complete Android session setup from the exact profile Flask authorized
+     * for this Firebase UID.  A new device must not depend on legacy Firestore
+     * shared_state or a pre-existing local account cache to log in.
+     */
+    fun signInLinkedFirebaseProfile(profile: FlaskEmailGateway.LinkedProfile, onResult: (Result<User>) -> Unit) {
+        val role = Role.fromLabel(profile.role)
+        val schoolId = profile.identifier.trim().lowercase()
+        val fullName = profile.fullName.trim()
+        if (profile.id <= 0 || schoolId.isBlank() || fullName.isBlank()) {
+            onResult(Result.failure(IllegalArgumentException("The school server returned an incomplete linked profile.")))
+            return
         }
+        val classNames = profile.classNames.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        val user = User(
+            username = schoolId,
+            password = "",
+            role = role,
+            fullName = fullName,
+            className = profile.className.trim().ifBlank { classNames.firstOrNull().orEmpty() },
+            classNames = classNames,
+            subject = profile.subject.trim(),
+            approved = true,
+        )
+        // This is a device cache populated after Flask authorization, never a
+        // source of authorization or a Firestore shared-state write.
+        SchoolRepository.cacheAuthorizedProfile(user)
+        finishLogin(user, "", onResult)
     }
 
     fun selectAuthorizedProfile(profileId: Int) {
         require(profileId > 0)
         activeProfileId = profileId
     }
+
+    /** Saves a verified Firebase email only in encrypted storage on this device. */
+    fun rememberEmailForSchoolId(role: Role, schoolId: String, email: String) {
+        if (::emailAliasStore.isInitialized) emailAliasStore.remember(role, schoolId, email)
+    }
+
+    /** Returns a device-local verified-email alias; it is never looked up from Flask. */
+    fun rememberedEmailForSchoolId(role: Role, schoolId: String): String? =
+        if (::emailAliasStore.isInitialized) emailAliasStore.emailFor(role, schoolId) else null
 
     fun registerRoleAccount(
         role: Role,

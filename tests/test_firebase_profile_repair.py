@@ -8,6 +8,7 @@ from app import create_app
 from app.database import close_db, get_db
 from app.firebase_auth import FirebaseAuthProvisioningError
 from app.routes import (
+    linked_school_profile_payload,
     mobile_profile_from_payload,
     repair_admin_firebase_profile,
     repair_missing_firebase_profile_links,
@@ -15,6 +16,46 @@ from app.routes import (
 
 
 class FirebaseProfileRepairTests(unittest.TestCase):
+    def test_linked_profile_payload_contains_server_owned_student_class(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {
+                    "FLASK_DATABASE": str(Path(temp_dir) / "linked-profile.db"),
+                    "FLASK_UPLOAD_FOLDER": str(Path(temp_dir) / "uploads"),
+                    "DATABASE_URL": "",
+                },
+                clear=False,
+            ):
+                app = create_app()
+                app.config.update(TESTING=True)
+                with app.app_context():
+                    db = get_db()
+                    class_id = db.execute(
+                        "INSERT INTO classes (name, section) VALUES (?, ?) RETURNING id",
+                        ("Grade 8", "A"),
+                    ).fetchone()["id"]
+                    user_id = db.execute(
+                        """INSERT INTO users (username, password_hash, full_name, role, activated)
+                        VALUES (?, ?, ?, 'student', 1) RETURNING id""",
+                        ("stu008", "hash", "Student Eight"),
+                    ).fetchone()["id"]
+                    db.execute(
+                        """INSERT INTO student_master_records
+                        (student_id, full_name, class_id, login_user_id, registration_completed)
+                        VALUES (?, ?, ?, ?, 1)""",
+                        ("stu008", "Student Eight", class_id, user_id),
+                    )
+                    db.commit()
+                    user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+                    payload = linked_school_profile_payload(db, user)
+                    close_db()
+
+                self.assertEqual(payload["identifier"], "stu008")
+                self.assertEqual(payload["role"], "student")
+                self.assertEqual(payload["class_name"], "Grade 8 - A")
+                self.assertEqual(payload["class_names"], ["Grade 8 - A"])
+
     def test_verified_admin_claim_repairs_the_single_existing_admin_profile(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(

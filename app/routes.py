@@ -722,6 +722,47 @@ def linked_school_profiles(db, firebase_uid):
     ).fetchall()
 
 
+def linked_school_profile_payload(db, user):
+    """Return the selected server-authorized profile data required to start a mobile session.
+
+    The Android client caches this response for offline presentation only.  It
+    never determines whether a Firebase identity may use a school profile;
+    that decision remains the preceding Flask/database lookup.
+    """
+    class_name = ""
+    class_names = []
+    subject = ""
+    if user["role"] == "student":
+        row = db.execute(
+            """SELECT c.name || CASE WHEN TRIM(COALESCE(c.section, '')) = '' THEN '' ELSE ' - ' || c.section END AS class_name
+            FROM users u
+            LEFT JOIN student_profiles sp ON sp.user_id = u.id
+            LEFT JOIN student_master_records sm ON sm.login_user_id = u.id
+            LEFT JOIN classes c ON c.id = COALESCE(sp.class_id, sm.class_id)
+            WHERE u.id = ?""",
+            (user["id"],),
+        ).fetchone()
+        class_name = str(row["class_name"] or "") if row else ""
+        class_names = [class_name] if class_name else []
+    elif user["role"] == "teacher":
+        rows = db.execute(
+            """SELECT name || CASE WHEN TRIM(COALESCE(section, '')) = '' THEN '' ELSE ' - ' || section END AS class_name
+            FROM classes WHERE teacher_id = ? ORDER BY name, section""",
+            (user["id"],),
+        ).fetchall()
+        class_names = [str(row["class_name"] or "") for row in rows if str(row["class_name"] or "")]
+        class_name = class_names[0] if class_names else ""
+        teacher = db.execute(
+            "SELECT subject FROM teacher_master_records WHERE login_user_id = ?", (user["id"],)
+        ).fetchone()
+        subject = str(teacher["subject"] or "") if teacher else ""
+    return {
+        "id": user["id"], "identifier": user["username"], "full_name": user["full_name"],
+        "role": user["role"], "class_name": class_name, "class_names": class_names,
+        "subject": subject,
+    }
+
+
 def repair_admin_firebase_profile(db, firebase_uid, firebase_id_token):
     """Bind the sole unmapped active admin only after its Firebase admin claim is verified."""
     if verified_firebase_admin_uid(firebase_id_token) != firebase_uid:
@@ -1136,7 +1177,10 @@ def firebase_session_login():
                 profiles = [admin]
         if not profiles:
             raise FirebaseAuthProvisioningError("No active school account is linked to this Firebase login.")
-        return jsonify(message="Select the school profile to use.", profiles=[{"id": row["id"], "identifier": row["username"], "full_name": row["full_name"], "role": row["role"]} for row in profiles])
+        return jsonify(
+            message="Select the school profile to use.",
+            profiles=[linked_school_profile_payload(db, row) for row in profiles],
+        )
     except FirebaseAuthProvisioningError as error:
         return jsonify(error=str(error)), 401
 

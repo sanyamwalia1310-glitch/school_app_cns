@@ -19,7 +19,15 @@ object FlaskEmailGateway {
     class ApiException(message: String, val statusCode: Int) : Exception(message)
 
     data class Registration(val token: String, val email: String, val message: String, val verificationRequired: Boolean)
-    data class LinkedProfile(val id: Int, val identifier: String, val fullName: String, val role: String)
+    data class LinkedProfile(
+        val id: Int,
+        val identifier: String,
+        val fullName: String,
+        val role: String,
+        val className: String = "",
+        val classNames: List<String> = emptyList(),
+        val subject: String = "",
+    )
 
     fun startRegistration(role: String, identifier: String, email: String, password: String, confirm: String, firebaseIdToken: String = "", callback: (Result<Registration>) -> Unit) = request(callback) {
         val body = post("/api/email-registration/start", mapOf("role" to role, "identifier" to identifier, "email" to email, "password" to password, "confirm_password" to confirm, "firebase_id_token" to firebaseIdToken))
@@ -56,12 +64,25 @@ object FlaskEmailGateway {
         ))
         Unit
     }
-    fun linkedProfiles(firebaseIdToken: String, callback: (Result<List<LinkedProfile>>) -> Unit) = request(callback) {
-        val body = post("/api/firebase-session/login", mapOf("firebase_id_token" to firebaseIdToken))
+    fun linkedProfiles(firebaseIdToken: String, legacySchoolId: String = "", callback: (Result<List<LinkedProfile>>) -> Unit) = request(callback) {
+        val body = post("/api/firebase-session/login", mapOf(
+            "firebase_id_token" to firebaseIdToken,
+            "legacy_school_id" to legacySchoolId.trim()
+        ))
         val items = body["profiles"] as? List<*> ?: emptyList<Any>()
         items.mapNotNull { item -> (item as? Map<*, *>)?.let { map ->
             val id = (map["id"] as? Number)?.toInt() ?: return@let null
-            LinkedProfile(id, map["identifier"]?.toString().orEmpty(), map["full_name"]?.toString().orEmpty(), map["role"]?.toString().orEmpty())
+            LinkedProfile(
+                id = id,
+                identifier = map["identifier"]?.toString().orEmpty(),
+                fullName = map["full_name"]?.toString().orEmpty(),
+                role = map["role"]?.toString().orEmpty(),
+                className = map["class_name"]?.toString().orEmpty(),
+                classNames = (map["class_names"] as? List<*>)
+                    ?.mapNotNull { value -> value?.toString()?.trim()?.takeIf { it.isNotEmpty() } }
+                    .orEmpty(),
+                subject = map["subject"]?.toString().orEmpty(),
+            )
         } }
     }
     fun selectProfile(firebaseIdToken: String, profileId: Int, callback: (Result<Unit>) -> Unit) = request(callback) { post("/api/firebase-session/select", mapOf("firebase_id_token" to firebaseIdToken, "profile_id" to profileId.toString())); Unit }

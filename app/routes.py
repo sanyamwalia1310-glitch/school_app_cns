@@ -1557,6 +1557,31 @@ def mobile_staff_subjects():
         return jsonify(error=str(error)), 403
 
 
+@main.route("/api/mobile/staff/classes", methods=["POST"])
+def mobile_staff_classes():
+    """Return every class the selected staff profile may use for academic work."""
+    payload = request.get_json(silent=True) or {}
+    try:
+        actor = mobile_profile_from_payload(payload, "admin", "teacher")
+        db = get_db()
+        if actor["role"] == "admin":
+            rows = db.execute(
+                """SELECT id, name || CASE WHEN TRIM(COALESCE(section, '')) = ''
+                    THEN '' ELSE ' - ' || section END AS name
+                FROM classes ORDER BY name, section"""
+            ).fetchall()
+        else:
+            rows = db.execute(
+                """SELECT id, name || CASE WHEN TRIM(COALESCE(section, '')) = ''
+                    THEN '' ELSE ' - ' || section END AS name
+                FROM classes WHERE teacher_id = ? ORDER BY name, section""",
+                (actor["id"],),
+            ).fetchall()
+        return jsonify(items=[dict(row) for row in rows])
+    except (ValueError, FirebaseAuthProvisioningError) as error:
+        return jsonify(error=str(error)), 403
+
+
 @main.route("/api/mobile/staff/class-students", methods=["POST"])
 def mobile_staff_class_students():
     """Return the permanent school roster for one authorized staff class.

@@ -3315,9 +3315,7 @@ object SchoolRepository {
                 if (token.isBlank()) return@addOnSuccessListener complete(null)
                 FlaskEmailGateway.linkedProfiles(token, user.username) { profilesResult ->
                     val profile = profilesResult.getOrNull()?.singleOrNull() ?: return@linkedProfiles complete(null)
-                    FlaskEmailGateway.selectProfile(token, profile.id) { selected ->
-                        complete(profile.id.takeIf { selected.isSuccess })
-                    }
+                    complete(profile.id)
                 }
             }
             .addOnFailureListener { complete(null) }

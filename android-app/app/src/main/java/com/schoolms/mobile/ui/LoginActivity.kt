@@ -156,35 +156,39 @@ class LoginActivity : BaseActivity() {
 
     private fun signInSharedFirebaseEmail(email: String, password: String, attemptId: Int) {
         FirebaseAuth.getInstance().signInWithEmailAndPassword(email, password).addOnSuccessListener { credential ->
-            credential.user?.reload()?.addOnSuccessListener {
-                val user = credential.user
-                if (user == null || !user.isEmailVerified) { completeSharedLogin(attemptId, Result.failure(IllegalArgumentException("Please verify your email before logging in."))); return@addOnSuccessListener }
-                user.getIdToken(true).addOnSuccessListener { token -> FlaskEmailGateway.linkedProfiles(token.token.orEmpty()) { result -> runOnUiThread {
+            val user = credential.user
+            if (user == null || !user.isEmailVerified) {
+                completeSharedLogin(attemptId, Result.failure(IllegalArgumentException("Please verify your email before logging in.")))
+                return@addOnSuccessListener
+            }
+            // Firebase sign-in has already fetched current account state. Avoid an
+            // extra reload and forced token refresh on the critical login path.
+            user.getIdToken(false).addOnSuccessListener { token -> FlaskEmailGateway.linkedProfiles(token.token.orEmpty()) { result -> runOnUiThread {
                     result.onSuccess { profiles ->
                         if (profiles.isEmpty()) completeSharedLogin(attemptId, Result.failure(IllegalArgumentException("No school profile is linked to this Firebase email.")))
                         else if (profiles.size == 1) selectSharedProfile(token.token.orEmpty(), profiles.first(), email, attemptId)
                         else AlertDialog.Builder(this).setTitle("Choose school profile").setItems(profiles.map { "${it.fullName} — ${it.identifier} (${it.role})" }.toTypedArray()) { _, index -> selectSharedProfile(token.token.orEmpty(), profiles[index], email, attemptId) }.show()
                     }.onFailure { completeSharedLogin(attemptId, Result.failure(it)) }
                 } } }
-            }
         }.addOnFailureListener { completeSharedLogin(attemptId, Result.failure(it)) }
     }
 
     private fun selectSharedProfile(token: String, profile: FlaskEmailGateway.LinkedProfile, email: String, attemptId: Int) {
-        FlaskEmailGateway.selectProfile(token, profile.id) { selected -> runOnUiThread { selected.onSuccess {
-            SessionManager.selectAuthorizedProfile(profile.id)
-            SessionManager.rememberEmailForSchoolId(Role.fromLabel(profile.role), profile.identifier, email)
-            SessionManager.signInLinkedFirebaseProfile(profile) { result ->
-                if (result.isSuccess) {
-                    FirebaseMessaging.getInstance().token.addOnSuccessListener { deviceToken ->
-                        FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.addOnSuccessListener { currentToken ->
-                            FlaskEmailGateway.registerFcmToken(currentToken.token.orEmpty(), profile.id, deviceToken) { }
-                        }
+        // linkedProfiles() has already Flask-authorized this Firebase UID/profile
+        // pair. Every protected mobile endpoint verifies the pair again, so an
+        // unused browser-session select request only slows Android sign-in down.
+        SessionManager.selectAuthorizedProfile(profile.id)
+        SessionManager.rememberEmailForSchoolId(Role.fromLabel(profile.role), profile.identifier, email)
+        SessionManager.signInLinkedFirebaseProfile(profile) { result ->
+            if (result.isSuccess) {
+                FirebaseMessaging.getInstance().token.addOnSuccessListener { deviceToken ->
+                    FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.addOnSuccessListener { currentToken ->
+                        FlaskEmailGateway.registerFcmToken(currentToken.token.orEmpty(), profile.id, deviceToken) { }
                     }
                 }
-                completeSharedLogin(attemptId, result)
             }
-        }.onFailure { completeSharedLogin(attemptId, Result.failure(it)) } } }
+            completeSharedLogin(attemptId, result)
+        }
     }
 
     private fun completeSharedLogin(attemptId: Int, result: Result<com.schoolms.mobile.data.User>) {
@@ -202,16 +206,12 @@ class LoginActivity : BaseActivity() {
         firebaseUser.getIdToken(false).addOnSuccessListener { idToken ->
             FlaskEmailGateway.linkedProfiles(idToken.token.orEmpty()) { profilesResult -> runOnUiThread {
                 val profile = profilesResult.getOrNull()?.singleOrNull() ?: return@runOnUiThread
-                FlaskEmailGateway.selectProfile(idToken.token.orEmpty(), profile.id) { selected ->
-                    if (selected.isSuccess) {
-                        SessionManager.selectAuthorizedProfile(profile.id)
-                        FirebaseMessaging.getInstance().token.addOnSuccessListener { deviceToken ->
-                            FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.addOnSuccessListener { freshToken ->
-                                FlaskEmailGateway.registerFcmToken(freshToken.token.orEmpty(), profile.id, deviceToken) { }
-                            }
+                SessionManager.selectAuthorizedProfile(profile.id)
+                FirebaseMessaging.getInstance().token.addOnSuccessListener { deviceToken ->
+                    FirebaseAuth.getInstance().currentUser?.getIdToken(false)?.addOnSuccessListener { freshToken ->
+                        FlaskEmailGateway.registerFcmToken(freshToken.token.orEmpty(), profile.id, deviceToken) { }
                         }
                     }
-                }
             } }
         }
     }
@@ -356,7 +356,9 @@ class LoginActivity : BaseActivity() {
     }
 
     companion object {
-        const val LOGIN_TIMEOUT_MS = 20_000L
+        // Render may need to wake before a first request. This is an upper bound,
+        // not an "internet failed" diagnosis; the reduced login path is faster.
+        const val LOGIN_TIMEOUT_MS = 60_000L
         const val BIOMETRIC_AUTHENTICATORS = BiometricManager.Authenticators.BIOMETRIC_WEAK
         const val EXTRA_PREFILLED_EMAIL = "login_prefilled_email"
         const val EXTRA_PREFILLED_ROLE = "login_prefilled_role"

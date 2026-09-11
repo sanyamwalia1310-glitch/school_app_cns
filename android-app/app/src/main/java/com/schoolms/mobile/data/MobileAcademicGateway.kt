@@ -24,6 +24,9 @@ import kotlin.concurrent.thread
 object MobileAcademicGateway {
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 20_000
+    // A private attachment goes through Flask to Cloudinary.  It can take longer
+    // than a JSON request on slower school networks, so keep its timeout separate.
+    private const val UPLOAD_READ_TIMEOUT_MS = 90_000
     private val gson = Gson()
 
     class ApiException(message: String, val statusCode: Int = 0) : Exception(message)
@@ -43,6 +46,7 @@ object MobileAcademicGateway {
     data class Attendance(val date: String, val subject: String, val className: String, val present: Boolean)
     data class Download(val url: String, val filename: String)
     data class Upload(val mediaId: Int, val filename: String)
+    data class StaffClass(val name: String)
     data class StaffSubject(val name: String)
     data class StaffStudent(val username: String, val fullName: String, val rollNumber: String)
 
@@ -136,6 +140,12 @@ object MobileAcademicGateway {
         }
 
     fun staffClassStudents(className: String, callback: (Result<List<StaffStudent>>) -> Unit) =
+    /** Server-authoritative class list: all classes for admins, assigned classes for teachers. */
+    fun staffClasses(callback: (Result<List<StaffClass>>) -> Unit) =
+        authenticated("/api/mobile/staff/classes", callback) { payload ->
+            payload.items().map { StaffClass(it.string("name")) }.filter { it.name.isNotBlank() }
+        }
+
         authenticated("/api/mobile/staff/class-students", callback, mapOf("class_name" to className)) { payload ->
             payload.items().map {
                 StaffStudent(it.string("username"), it.string("full_name"), it.string("roll_no"))
@@ -273,7 +283,7 @@ object MobileAcademicGateway {
         try {
             connection.requestMethod = "POST"
             connection.connectTimeout = CONNECT_TIMEOUT_MS
-            connection.readTimeout = READ_TIMEOUT_MS * 3
+            connection.readTimeout = UPLOAD_READ_TIMEOUT_MS
             connection.doOutput = true
             connection.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
             connection.setRequestProperty("Accept", "application/json")

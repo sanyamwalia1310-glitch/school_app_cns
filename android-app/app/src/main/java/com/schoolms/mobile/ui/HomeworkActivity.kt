@@ -338,9 +338,34 @@ class HomeworkActivity : BaseActivity() {
 
     private fun showAddHomeworkClassPicker() {
         if (isFinishing || isDestroyed) return
-        val classes = SchoolRepository.availableClasses()
+        val user = SessionManager.currentUser ?: return
+        if (user.role != Role.ADMIN && user.role != Role.TEACHER) return
+        val loading = AlertDialog.Builder(this)
+            .setMessage("Loading your authorized classes…")
+            .setCancelable(false)
+            .create()
+        loading.show()
+        MobileAcademicGateway.staffClasses { result ->
+            runOnUiThread {
+                if (isFinishing || isDestroyed) return@runOnUiThread
+                loading.dismiss()
+                result.onSuccess { classes -> showHomeworkClassPicker(classes.map { it.name }) }
+                    .onFailure { error ->
+                        AlertDialog.Builder(this)
+                            .setTitle("Unable to load classes")
+                            .setMessage(error.message ?: "The school server did not return your class assignments.")
+                            .setNegativeButton("Cancel", null)
+                            .setPositiveButton("Retry") { _, _ -> showAddHomeworkClassPicker() }
+                            .show()
+                    }
+            }
+        }
+    }
+
+    private fun showHomeworkClassPicker(classes: List<String>) {
+        if (isFinishing || isDestroyed) return
         if (classes.isEmpty()) {
-            Toast.makeText(this, "No classes available", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "No class is assigned to this account yet", Toast.LENGTH_LONG).show()
             return
         }
         AlertDialog.Builder(this)

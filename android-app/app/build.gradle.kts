@@ -29,8 +29,8 @@ android {
         applicationId = "com.sanyam.loginui"
         minSdk = 23
         targetSdk = 35
-        versionCode = 40
-        versionName = "1.6.23"
+        versionCode = 41
+        versionName = "1.6.24"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

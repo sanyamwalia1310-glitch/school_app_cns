@@ -42,6 +42,8 @@ import java.util.Locale
 class HomeworkActivity : BaseActivity() {
     private lateinit var adapter: SimpleListAdapter
     private var query: String = ""
+    // Retained only to render historical submissions from earlier app versions.
+    // The student UI no longer exposes any upload or resubmission action.
     private var selectedFileNames: MutableList<String> = mutableListOf()
     private var selectedFileUris: MutableList<Uri> = mutableListOf()
     private var selectedCameraBitmaps: MutableList<Pair<String, Bitmap>> = mutableListOf()
@@ -65,9 +67,7 @@ class HomeworkActivity : BaseActivity() {
 
     private val cameraPreview = registerForActivityResult(ActivityResultContracts.TakePicturePreview()) { bitmap ->
         if (bitmap != null) {
-            if (selectedFileUris.isNotEmpty()) {
-                selectedFileNames.clear()
-            }
+            if (selectedFileUris.isNotEmpty()) selectedFileNames.clear()
             selectedFileUris.clear()
             val name = "camera_homework_${System.currentTimeMillis()}.jpg"
             selectedCameraBitmaps.add(name to bitmap)
@@ -96,10 +96,7 @@ class HomeworkActivity : BaseActivity() {
         setupToolbar(findViewById<MaterialToolbar>(R.id.toolbar), getString(R.string.homework_title))
 
         val studentHintText = findViewById<TextView>(R.id.studentHintText)
-        val selectedFileText = findViewById<TextView>(R.id.selectedFileText)
         val studentUploadActions = findViewById<View>(R.id.studentUploadActions)
-        val chooseFileButton = findViewById<MaterialButton>(R.id.chooseFileButton)
-        val cameraButton = findViewById<MaterialButton>(R.id.cameraButton)
         val uploadButton = findViewById<MaterialButton>(R.id.uploadHomeworkButton)
         val addHomeworkButton = findViewById<MaterialButton>(R.id.addHomeworkDashboardButton)
         val homeworkListHeader = findViewById<TextView>(R.id.homeworkListHeader)
@@ -118,7 +115,6 @@ class HomeworkActivity : BaseActivity() {
         })
 
         studentHintText.visibility = if (user.role == Role.STUDENT || user.role == Role.TEACHER) View.VISIBLE else View.GONE
-        selectedFileText.visibility = View.GONE
         studentUploadActions.visibility = View.GONE
         uploadButton.visibility = View.GONE
         addHomeworkButton.visibility = if (user.role == Role.TEACHER || user.role == Role.ADMIN) View.VISIBLE else View.GONE
@@ -138,13 +134,10 @@ class HomeworkActivity : BaseActivity() {
         }
         addHomeworkButton.setOnClickListener { showAddHomeworkClassPicker() }
         selectedHomeworkText.visibility = View.GONE
-        chooseFileButton.setOnClickListener { filePicker.launch("*/*") }
-        cameraButton.setOnClickListener { cameraPreview.launch(null) }
-        uploadButton.setOnClickListener { submitSelectedHomework() }
         studentHintText.text = if (user.role == Role.TEACHER) {
             "First choose a class. Then choose the subject where you have shared homework."
         } else {
-            "Homework is shown below. Tap one homework to choose file, use camera, and upload to that exact task."
+            "Complete homework in your notebook or on the hard copy, then bring it to school for checking and marks."
         }
         selectedHomeworkText.text = getString(R.string.no_homework_selected)
 
@@ -190,10 +183,9 @@ class HomeworkActivity : BaseActivity() {
         }
         currentStudentHomework = studentHomework
         val rows = studentHomework.map {
-            val ownSubmission = it.submissions.firstOrNull { submission -> submission.studentUsername == user.username }
             SimpleListItem(
                 title = "${it.title} (${it.subject})",
-                subtitle = "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }.ifEmpty { listOf("No file") }.joinToString()}\nMy submission: ${ownSubmission?.fileNames?.ifEmpty { listOfNotNull(ownSubmission.fileName) }?.joinToString() ?: "Pending"}",
+                subtitle = "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }.ifEmpty { listOf("No file") }.joinToString()}\nSubmit: bring your completed hard copy to school.",
                 badge = it.className
             )
         }
@@ -206,7 +198,6 @@ class HomeworkActivity : BaseActivity() {
                 ))
             }
         )
-        updateStudentUploadState()
     }
 
     private fun bindTeacherHomework(user: com.schoolms.mobile.data.User) {
@@ -316,7 +307,7 @@ class HomeworkActivity : BaseActivity() {
             .sortedWith(compareBy<HomeworkItem> { it.dueDate }.thenBy { it.title })
         findViewById<RecyclerView>(R.id.homeworkRecycler).adapter = TeacherHomeworkAdapter(
             items = homeworkItems,
-            onViewSubmissions = { showTeacherHomeworkStatus(it) },
+            onViewSubmissions = { openOfflineHomeworkMarks(it) },
             onEdit = { openHomeworkEditor(it) },
             onDelete = { deleteTeacherHomework(it) },
             onOpenAttachments = { openTeacherHomeworkAttachments(it) }
@@ -384,7 +375,7 @@ class HomeworkActivity : BaseActivity() {
 
     private fun showTeacherHomeworkActions(item: HomeworkItem) {
         val attachmentUrls = item.attachmentUrls.ifEmpty { listOfNotNull(item.attachmentUrl) }
-        val actions = mutableListOf("View submissions (${item.submissions.size})", "Edit homework", "Delete homework")
+        val actions = mutableListOf("Record hard-copy marks", "Edit homework", "Delete homework")
         if (attachmentUrls.isNotEmpty()) {
             actions.add(0, "Open attachments (${attachmentUrls.size})")
         }
@@ -397,7 +388,7 @@ class HomeworkActivity : BaseActivity() {
                         item.attachmentNames.ifEmpty { listOfNotNull(item.attachmentName) },
                         attachmentUrls
                     )
-                    "View submissions (${item.submissions.size})" -> showTeacherHomeworkStatus(item)
+                    "Record hard-copy marks" -> openOfflineHomeworkMarks(item)
                     "Edit homework" -> openHomeworkEditor(item)
                     "Delete homework" -> deleteTeacherHomework(item)
                 }
@@ -487,6 +478,21 @@ class HomeworkActivity : BaseActivity() {
             .show()
     }
 
+    private fun openOfflineHomeworkMarks(item: HomeworkItem) {
+        AlertDialog.Builder(this)
+            .setTitle("Record hard-copy homework marks")
+            .setMessage("${item.title}\n${item.className} | ${item.subject}\n\nStudents submit this work offline. Check their notebook or hard copy, then select each student and enter the homework marks.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Open marks") { _, _ ->
+                startActivity(
+                    Intent(this, ClassRecordsActivity::class.java)
+                        .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_MARKS)
+                        .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, item.className)
+                )
+            }
+            .show()
+    }
+
     private fun openAttachmentList(names: List<String>, urls: List<String>) {
         if (urls.size == 1) {
             openAttachment(urls.first())
@@ -568,11 +574,6 @@ class HomeworkActivity : BaseActivity() {
         }
 
     private fun showStudentHomeworkDialog(homework: HomeworkItem) {
-        val user = SessionManager.currentUser ?: return
-        selectedHomeworkId = homework.id
-        resetSubmissionFile()
-        val ownSubmission = homework.submissions.firstOrNull { it.studentUsername == user.username }
-
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 18, 36, 8)
@@ -585,23 +586,10 @@ class HomeworkActivity : BaseActivity() {
         }
         val detailView = TextView(this).apply {
             val teacherFiles = homework.attachmentNames.ifEmpty { listOfNotNull(homework.attachmentName) }
-            val submissionFiles = ownSubmission?.fileNames?.ifEmpty { listOfNotNull(ownSubmission.fileName) }.orEmpty()
-            text = "${homework.subject} | ${homework.className}\nDue: ${homework.dueDate}\n${homework.description}\n\nTeacher attachments: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\nMy submission: ${submissionFiles.ifEmpty { listOf("Pending") }.joinToString()}"
+            text = "${homework.subject} | ${homework.className}\nDue: ${homework.dueDate}\n${homework.description}\n\nTeacher attachments: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\n\nComplete this work on the required hard copy or in your notebook and bring it to school. Your teacher will check it offline and record marks in the Marks section. Online student uploads are not used."
             textSize = 14f
             setTextColor(ContextCompat.getColor(this@HomeworkActivity, R.color.text_secondary))
             setPadding(0, 12, 0, 14)
-        }
-        val fileStatus = TextView(this).apply {
-            text = "Selected files: ${getString(R.string.no_file_selected)}"
-            textSize = 14f
-            setTextColor(ContextCompat.getColor(this@HomeworkActivity, R.color.brand_primary))
-            setPadding(0, 8, 0, 8)
-        }
-        selectedFileStatusView = fileStatus
-
-        val actionRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            weightSum = 2f
         }
         val teacherAttachmentUrls = homework.attachmentUrls.ifEmpty { listOfNotNull(homework.attachmentUrl) }
         val privateAttachmentIds = homework.attachmentIds
@@ -617,62 +605,16 @@ class HomeworkActivity : BaseActivity() {
                 else openAttachmentList(teacherAttachmentNames, teacherAttachmentUrls)
             }
         }
-        val chooseButton = MaterialButton(this).apply {
-            text = getString(R.string.choose_file)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginEnd = 8
-            }
-            setOnClickListener { filePicker.launch("*/*") }
-        }
-        val cameraButton = MaterialButton(this).apply {
-            text = getString(R.string.use_camera)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                marginStart = 8
-            }
-            setOnClickListener { cameraPreview.launch(null) }
-        }
-        actionRow.addView(chooseButton)
-        actionRow.addView(cameraButton)
-
-        val uploadButton = MaterialButton(this).apply {
-            text = if (ownSubmission == null) getString(R.string.upload_homework) else "Resubmit homework"
-            isEnabled = false
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = 12
-            }
-            setTextColor(ContextCompat.getColor(this@HomeworkActivity, android.R.color.white))
-            backgroundTintList = ContextCompat.getColorStateList(this@HomeworkActivity, R.color.brand_primary)
-            setOnClickListener { submitSelectedHomework() }
-        }
-        dialogUploadButton = uploadButton
 
         container.addView(titleView)
         container.addView(detailView)
         container.addView(openTeacherFilesButton)
-        if (ownSubmission != null) {
-            container.addView(TextView(this).apply {
-                text = "To replace a wrong file, choose new file(s) or camera image, then tap Resubmit homework. The previous submitted files will be removed."
-                textSize = 13f
-                setTextColor(ContextCompat.getColor(this@HomeworkActivity, R.color.text_secondary))
-                setPadding(0, 12, 0, 4)
-            })
-        }
-        container.addView(fileStatus)
-        container.addView(actionRow)
-        container.addView(uploadButton)
 
-        activeSubmissionDialog = AlertDialog.Builder(this)
-            .setTitle(if (ownSubmission == null) "Submit homework" else "Resubmit homework")
+        AlertDialog.Builder(this)
+            .setTitle("Homework details")
             .setView(container)
-            .setNegativeButton("Close") { _, _ ->
-                selectedHomeworkId = null
-                selectedPreviousSubmissionUrls = emptyList()
-                selectedFileStatusView = null
-                dialogUploadButton = null
-                resetSubmissionFile()
-            }
+            .setPositiveButton("Close", null)
             .show()
-        selectedPreviousSubmissionUrls = ownSubmission?.fileUrls?.ifEmpty { listOfNotNull(ownSubmission.fileUrl) }.orEmpty()
     }
 
     private fun submitSelectedHomework() {
@@ -833,17 +775,14 @@ class HomeworkActivity : BaseActivity() {
 
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             val item = items[position]
-            val totalStudents = SchoolRepository.studentsForClass(item.className).size
-            val submitted = item.submissions.size
-            val pending = (totalStudents - submitted).coerceAtLeast(0)
             val attachments = item.attachmentNames.ifEmpty { listOfNotNull(item.attachmentName) }
             holder.metaText.text = "${item.className} | ${item.subject}"
             holder.titleText.text = item.title
-            holder.detailText.text = "Due ${item.dueDate}\n${item.description}\nAttachments: ${attachments.ifEmpty { listOf("No file") }.joinToString()}\nSubmitted $submitted | Pending $pending"
+            holder.detailText.text = "Due ${item.dueDate}\n${item.description}\nAttachments: ${attachments.ifEmpty { listOf("No file") }.joinToString()}\nCheck hard copies offline, then record marks."
             holder.itemView.setOnClickListener { onViewSubmissions(item) }
             holder.openButton.isEnabled = attachments.isNotEmpty()
             holder.openButton.setOnClickListener { onOpenAttachments(item) }
-            holder.viewButton.text = "View $submitted/$totalStudents"
+            holder.viewButton.text = "Record marks"
             holder.viewButton.setOnClickListener { onViewSubmissions(item) }
             holder.editButton.setOnClickListener { onEdit(item) }
             holder.deleteButton.setOnClickListener { onDelete(item) }

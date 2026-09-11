@@ -335,15 +335,10 @@ class ClassRecordsActivity : BaseActivity() {
                     user.role != Role.TEACHER || it.teacherUsername == user.username
                 }
                 recyclerView.adapter = SimpleListAdapter(items.map {
-                    val submissionSummary = when (it.submissions.size) {
-                        0 -> "No submissions yet"
-                        1 -> "1 submission: ${it.submissions.first().fileNames.ifEmpty { listOf(it.submissions.first().fileName) }.size} file(s)"
-                        else -> "${it.submissions.size} submissions"
-                    }
                     val attachments = it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }
                     SimpleListItem(
                         "${it.title} (${it.subject})",
-                        "${it.description}\nDue: ${it.dueDate}\nAttachments: ${attachments.ifEmpty { listOf("No file") }.joinToString()}\n$submissionSummary",
+                        "${it.description}\nDue: ${it.dueDate}\nAttachments: ${attachments.ifEmpty { listOf("No file") }.joinToString()}\nStudents submit hard copies offline; use Marks after checking them.",
                         className
                     )
                 }) { position ->
@@ -556,7 +551,7 @@ class ClassRecordsActivity : BaseActivity() {
 
     private fun showHomeworkActions(item: HomeworkItem) {
         val user = SessionManager.currentUser ?: return
-        val actions = mutableListOf("View submissions (${item.submissions.size})", "Edit homework", "Delete homework")
+        val actions = mutableListOf("Record hard-copy marks", "Edit homework", "Delete homework")
         val attachmentUrls = item.attachmentUrls.ifEmpty { listOfNotNull(item.attachmentUrl) }
         if (attachmentUrls.isNotEmpty()) {
             actions.add(0, "Open attachments (${attachmentUrls.size})")
@@ -569,7 +564,7 @@ class ClassRecordsActivity : BaseActivity() {
                         item.attachmentNames.ifEmpty { listOfNotNull(item.attachmentName) },
                         attachmentUrls
                     )
-                    "View submissions (${item.submissions.size})" -> showSubmissionList(item)
+                    "Record hard-copy marks" -> openOfflineHomeworkMarks(item)
                     "Edit homework" -> startEditHomework(item)
                     "Delete homework" -> {
                         val success = SchoolRepository.deleteHomework(user, item.id)
@@ -579,6 +574,21 @@ class ClassRecordsActivity : BaseActivity() {
                 }
             }
             .setNegativeButton("Close", null)
+            .show()
+    }
+
+    private fun openOfflineHomeworkMarks(item: HomeworkItem) {
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Record hard-copy homework marks")
+            .setMessage("${item.title}\n\nCheck each student's notebook or hard copy, then select the student and enter marks.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Open marks") { _, _ ->
+                startActivity(
+                    Intent(this, ClassRecordsActivity::class.java)
+                        .putExtra(EXTRA_MODE, MODE_MARKS)
+                        .putExtra(EXTRA_CLASS_NAME, item.className)
+                )
+            }
             .show()
     }
 

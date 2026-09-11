@@ -1,37 +1,20 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="card p-3">
-    <h1 class="h4 mb-3">Homework and Submissions</h1>
+    <h1 class="h4 mb-3">Homework</h1>
+    <p class="text-muted">Complete homework in your notebook or on the required hard copy. Bring it to school for teacher checking and marks; online student uploads are not used.</p>
     <table class="table">
-        <thead><tr><th>Title</th><th>Subject</th><th>Due</th><th>Status</th><th>Submit</th></tr></thead>
+        <thead><tr><th>Title</th><th>Subject</th><th>Due</th><th>Submission</th></tr></thead>
         <tbody>
         {% for item in rows %}
             <tr>
                 <td>{{ item.title }}</td>
                 <td>{{ item.subject_name }}</td>
                 <td>{{ item.due_date }}</td>
-                <td>
-                    {% if item.submission_id %}
-                        Submitted on {{ item.submitted_at }}
-                    {% else %}
-                        Pending
-                    {% endif %}
-                </td>
-                <td>
-                    {% if not item.submission_id %}
-                    <form method="post" enctype="multipart/form-data">
-                        <input type="hidden" name="homework_id" value="{{ item.id }}">
-                        <input type="text" class="form-control mb-2" name="notes" placeholder="Notes">
-                        <input type="file" class="form-control mb-2" name="submission_file">
-                        <button class="btn btn-sm btn-primary">Submit</button>
-                    </form>
-                    {% else %}
-                        <span class="text-success">Completed</span>
-                    {% endif %}
-                </td>
+                <td>Bring hard copy to school</td>
             </tr>
         {% else %}
-            <tr><td colspan="5">No homework assigned.</td></tr>
+            <tr><td colspan="4">No homework assigned.</td></tr>
         {% endfor %}
         </tbody>
     </table>

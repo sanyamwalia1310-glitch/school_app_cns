@@ -1345,7 +1345,7 @@ def upload_mobile_media():
         purpose = str(payload.get("purpose", "")).strip().lower()
         file_storage = request.files.get("file")
         public_purposes = {"gallery", "event", "facility", "announcement", "school_info"}
-        private_purposes = {"homework_attachment", "test_attachment", "homework_submission"}
+        private_purposes = {"homework_attachment", "test_attachment"}
         if purpose not in public_purposes | private_purposes:
             raise ValueError("Unsupported upload purpose.")
         if purpose in public_purposes and profile["role"] != "admin":
@@ -3242,37 +3242,17 @@ def student_attendance():
 def student_homework():
     db = get_db()
     if request.method == "POST":
-        homework_id = int(request.form["homework_id"])
-        if not student_can_access_homework(db, g.user["id"], homework_id):
-            flash("You can only submit homework assigned to your class.", "danger")
-            return redirect(url_for("main.student_homework"))
-        try:
-            db.execute(
-                """
-                INSERT INTO homework_submissions (homework_id, student_id, notes, file_name)
-                VALUES (?, ?, ?, ?)
-                """,
-                (
-                    homework_id,
-                    g.user["id"],
-                    request.form["notes"].strip(),
-                    save_uploaded_file(request.files.get("submission_file")),
-                ),
-            )
-        except Exception:
-            flash("You have already submitted this homework.", "warning")
-            return redirect(url_for("main.student_homework"))
-        db.commit()
-        flash("Homework submitted.", "success")
+        # Online student submissions were retired in favour of teacher-reviewed
+        # hard copies. Keep old rows intact, but never accept a new upload.
+        flash("Online homework submissions are disabled. Submit your hard copy to your teacher.", "info")
         return redirect(url_for("main.student_homework"))
 
     rows = db.execute(
         """
-        SELECT h.*, s.name AS subject_name, hs.id AS submission_id, hs.submitted_at
+        SELECT h.*, s.name AS subject_name
         FROM homework h
         JOIN student_profiles sp ON sp.class_id = h.class_id
         JOIN subjects s ON s.id = h.subject_id
-        LEFT JOIN homework_submissions hs ON hs.homework_id = h.id AND hs.student_id = sp.user_id
         WHERE sp.user_id = ?
         ORDER BY h.due_date ASC
         """,

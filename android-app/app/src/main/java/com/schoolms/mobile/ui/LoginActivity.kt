@@ -126,7 +126,7 @@ class LoginActivity : BaseActivity() {
                     loginAttemptId++
                     loginInProgress = false
                     setLoginPending(false)
-                    Toast.makeText(this, "Login is taking too long. Check your internet connection and try again.", Toast.LENGTH_LONG).show()
+                    Toast.makeText(this, "The school server is taking longer than expected. Please try again.", Toast.LENGTH_LONG).show()
                 }
             }, LOGIN_TIMEOUT_MS)
             val rememberedEmail = if (username.contains("@")) null else SessionManager.rememberedEmailForSchoolId(role, username)

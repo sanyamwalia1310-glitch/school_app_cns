@@ -3343,11 +3343,8 @@ object SchoolRepository {
 
     fun homeworkSummaryText(username: String): String {
         val items = homeworkForStudent(username)
-        if (items.isEmpty()) return "No homework assigned yet"
-        val normalizedUsername = username.trim().lowercase()
-        val submitted = items.count { item -> item.submissions.any { it.studentUsername == normalizedUsername } }
-        val pending = items.size - submitted
-        return "Homework assigned: ${items.size}\nSubmitted: $submitted\nPending: $pending"
+        if (items.isEmpty()) return "No classwork posted yet"
+        return "Classwork posted: ${items.size}\nOpen Classwork for instructions and teacher quality feedback."
     }
 
     fun addHomework(user: User, className: String, subject: String, title: String, description: String, dueDate: String, attachmentName: String?, attachmentUrl: String?): Boolean =

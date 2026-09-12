@@ -2,7 +2,6 @@ package com.schoolms.mobile.ui
 
 import android.os.Bundle
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.content.Intent
 import android.content.ActivityNotFoundException
 import android.view.GestureDetector
@@ -13,7 +12,6 @@ import android.widget.TableLayout
 import android.widget.TableRow
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import android.view.View
 import androidx.appcompat.app.AlertDialog
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -21,16 +19,12 @@ import androidx.recyclerview.widget.RecyclerView
 import androidx.core.content.ContextCompat
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.material.button.MaterialButton
-import com.google.firebase.ktx.Firebase
-import com.google.firebase.storage.ktx.storage
 import com.schoolms.mobile.R
 import com.schoolms.mobile.data.MarkItem
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
 import com.schoolms.mobile.data.SimpleListItem
 import com.schoolms.mobile.ui.adapter.SimpleListAdapter
-import java.io.File
-import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
 
@@ -38,33 +32,8 @@ class StudentDetailActivity : BaseActivity() {
     private var username: String = ""
     private var selectedSection: String = SECTION_ATTENDANCE
     private lateinit var gestureDetector: GestureDetector
-    private var selectedHomeworkFileName: String? = null
     private var currentHomework = emptyList<com.schoolms.mobile.data.HomeworkItem>()
     private var currentSubjectMarks = emptyList<Pair<String, List<MarkItem>>>()
-    private var dialogSelectedHomework: com.schoolms.mobile.data.HomeworkItem? = null
-    private var dialogSelectedFileName: String? = null
-    private var dialogSelectedFileUri: Uri? = null
-    private var dialogFileSelectedText: TextView? = null
-    private val dialogHomeworkPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        dialogSelectedFileUri = uri
-        dialogSelectedFileName = uri?.let { resolveDisplayName(it) } ?: getString(R.string.no_file_selected)
-        dialogFileSelectedText?.text = dialogSelectedFileName ?: getString(R.string.no_file_selected)
-    }
-
-    private val homeworkFilePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        selectedHomeworkFileName = uri?.let { resolveDisplayName(it) } ?: getString(R.string.no_file_selected)
-        findViewById<TextView>(R.id.homeworkSelectedFileText).text = selectedHomeworkFileName ?: getString(R.string.no_file_selected)
-    }
-
-    private fun resolveDisplayName(uri: Uri): String {
-        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) {
-                return cursor.getString(index).orEmpty().ifBlank { getString(R.string.no_file_selected) }
-            }
-        }
-        return uri.lastPathSegment?.substringAfterLast('/') ?: getString(R.string.no_file_selected)
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -87,9 +56,6 @@ class StudentDetailActivity : BaseActivity() {
         findViewById<RecyclerView>(R.id.detailRecycler).layoutManager = LinearLayoutManager(this@StudentDetailActivity)
         findViewById<MaterialButton>(R.id.attendanceSummaryButton).setOnClickListener {
             showAttendanceSummarySheet()
-        }
-        findViewById<MaterialButton>(R.id.homeworkChooseFileButton).setOnClickListener {
-            homeworkFilePicker.launch("*/*")
         }
         findViewById<MaterialButton>(R.id.attendanceSectionButton).setOnClickListener {
             selectedSection = SECTION_ATTENDANCE
@@ -198,24 +164,20 @@ class StudentDetailActivity : BaseActivity() {
                 attendanceCard.visibility = View.GONE
                 marksCard.visibility = View.GONE
                 homeworkCard.visibility = View.VISIBLE
-                homeworkHintText.visibility = if (isOwnStudentView) View.VISIBLE else View.GONE
-                homeworkSelectedFileText.visibility = if (isOwnStudentView) View.VISIBLE else View.GONE
-                homeworkChooseFileButton.visibility = if (isOwnStudentView) View.VISIBLE else View.GONE
-                if (selectedHomeworkFileName.isNullOrBlank()) {
-                    homeworkSelectedFileText.text = getString(R.string.no_file_selected)
-                }
+                // Classwork is checked offline by staff. Students do not upload files here.
+                homeworkHintText.visibility = View.GONE
+                homeworkSelectedFileText.visibility = View.GONE
+                homeworkChooseFileButton.visibility = View.GONE
                 currentHomework = SchoolRepository.homeworkForStudent(username)
                 currentHomework.map {
-                    val ownSubmission = it.submissions.firstOrNull { submission -> submission.studentUsername == username }
                     val teacherFiles = it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }
-                    val submissionFiles = ownSubmission?.fileNames?.ifEmpty { listOfNotNull(ownSubmission.fileName) }.orEmpty()
                     SimpleListItem(
                         "${it.title} (${it.subject})",
-                        "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\nMy submission: ${submissionFiles.ifEmpty { listOf("Pending") }.joinToString()}",
-                        if (ownSubmission != null) "Submitted" else "Pending"
+                        "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\n${classworkQualityText(it, username)}",
+                        "Classwork"
                     )
                 }.ifEmpty {
-                    listOf(SimpleListItem("Homework", "No homework assigned yet.", "Pending"))
+                    listOf(SimpleListItem("Classwork", "No classwork posted yet.", "Ready"))
                 }
             }
             SECTION_PROGRESS -> {
@@ -238,7 +200,7 @@ class StudentDetailActivity : BaseActivity() {
                 SECTION_HOMEWORK -> {
                     if (isOwnStudentView) {
                         val item = currentHomework.getOrNull(position) ?: return@SimpleListAdapter
-                        showHomeworkSubmissionDialog(item)
+                        showClassworkDialog(item, username)
                     }
                 }
                 SECTION_MARKS -> {
@@ -273,18 +235,19 @@ class StudentDetailActivity : BaseActivity() {
         val attendance = SchoolRepository.attendanceForStudent(profile.username)
         val attendancePercent = attendance?.let { SchoolRepository.attendancePercent(it) }
         val homework = SchoolRepository.homeworkForStudent(profile.username)
-        val submittedHomework = homework.count { item ->
-            item.submissions.any { submission -> submission.studentUsername == profile.username }
-        }
-        val homeworkPercent = homework.takeIf { it.isNotEmpty() }
-            ?.let { (submittedHomework.toDouble() / it.size.toDouble() * 100).toInt() }
         val marks = SchoolRepository.marksForStudent(profile.username)
+        val reviewedClasswork = homework.count { item ->
+            marks.any { mark ->
+                mark.subject.equals(item.subject, ignoreCase = true) &&
+                    mark.assessment.trim().equals("Homework: ${item.title}".trim(), ignoreCase = true)
+            }
+        }
         val marksPercent = marks.takeIf { it.isNotEmpty() }?.let {
             val totalScore = it.sumOf { mark -> mark.score }
             val totalOutOf = it.sumOf { mark -> mark.outOf }
             if (totalOutOf == 0) null else (totalScore.toDouble() / totalOutOf.toDouble() * 100).toInt()
         }
-        val overall = listOfNotNull(attendancePercent, homeworkPercent, marksPercent)
+        val overall = listOfNotNull(attendancePercent, marksPercent)
             .takeIf { it.isNotEmpty() }
             ?.average()
             ?.toInt()
@@ -292,24 +255,24 @@ class StudentDetailActivity : BaseActivity() {
         return listOf(
             SimpleListItem(
                 "Overall progress",
-                "Calculated from attendance, homework submission, and marks.\nScore: ${overall?.let { "$it%" } ?: "Not enough data"}",
-                overall?.let { progressLabel(it) } ?: "Pending"
+                "Calculated from attendance and teacher assessments.\nScore: ${overall?.let { "$it%" } ?: "Not enough data"}",
+                overall?.let { progressLabel(it) } ?: "Not recorded"
             ),
             SimpleListItem(
                 "Attendance",
                 attendance?.let { "Present ${it.presentDays}/${it.totalDays} days\nAttendance percentage: ${attendancePercent ?: 0}%" }
                     ?: "No attendance record saved yet.",
-                attendancePercent?.let { "$it%" } ?: "Pending"
+                attendancePercent?.let { "$it%" } ?: "Not recorded"
             ),
             SimpleListItem(
-                "Homework submission",
-                if (homework.isEmpty()) "No homework assigned yet." else "Submitted $submittedHomework/${homework.size} homework tasks\nSubmission percentage: ${homeworkPercent ?: 0}%",
-                homeworkPercent?.let { "$it%" } ?: "Pending"
+                "Classwork quality",
+                if (homework.isEmpty()) "No classwork posted yet." else "$reviewedClasswork/${homework.size} classwork task(s) reviewed by a teacher.\nHard copies are checked at school.",
+                if (homework.isEmpty()) "No classwork" else "$reviewedClasswork reviewed"
             ),
             SimpleListItem(
                 "Marks performance",
                 if (marks.isEmpty()) "No marks added yet." else "Assessments recorded: ${marks.size}\nMarks percentage: ${marksPercent ?: 0}%",
-                marksPercent?.let { "$it%" } ?: "Pending"
+                marksPercent?.let { "$it%" } ?: "Not recorded"
             )
         )
     }
@@ -321,50 +284,25 @@ class StudentDetailActivity : BaseActivity() {
         else -> "Needs care"
     }
 
-    private fun showHomeworkSubmissionDialog(item: com.schoolms.mobile.data.HomeworkItem) {
-        dialogSelectedHomework = item
-        dialogSelectedFileName = null
-        dialogSelectedFileUri = null
-        val dialogView = layoutInflater.inflate(R.layout.dialog_homework_submission, null)
-        dialogView.findViewById<TextView>(R.id.dialogHomeworkTitle).text = item.title
-        dialogView.findViewById<TextView>(R.id.dialogHomeworkDescription).text = item.description
-        dialogView.findViewById<TextView>(R.id.dialogHomeworkDue).text = "Due: ${item.dueDate}"
-        dialogFileSelectedText = dialogView.findViewById(R.id.dialogSelectedFileText)
-        val chooseBtn = dialogView.findViewById<MaterialButton>(R.id.dialogChooseFileButton)
-        val uploadBtn = dialogView.findViewById<MaterialButton>(R.id.dialogUploadButton)
+    private fun classworkQualityText(item: com.schoolms.mobile.data.HomeworkItem, studentUsername: String): String {
+        val quality = SchoolRepository.marksForStudent(studentUsername)
+            .lastOrNull { mark ->
+                mark.subject.equals(item.subject, ignoreCase = true) &&
+                    mark.assessment.trim().equals("Homework: ${item.title}".trim(), ignoreCase = true)
+            } ?: return "Teacher quality: awaiting review"
+        val stars = if (quality.outOf <= 0) 0 else ((quality.score.toDouble() / quality.outOf.toDouble()) * 5).toInt()
+            .coerceIn(0, 5)
+        return "Teacher quality: ${"★".repeat(stars)}${"☆".repeat(5 - stars)} (${quality.score}/${quality.outOf})"
+    }
+
+    private fun showClassworkDialog(item: com.schoolms.mobile.data.HomeworkItem, studentUsername: String) {
         val teacherAttachmentUrls = item.attachmentUrls.ifEmpty { listOfNotNull(item.attachmentUrl) }
         val teacherAttachmentNames = item.attachmentNames.ifEmpty { listOfNotNull(item.attachmentName) }
-
-        chooseBtn.setOnClickListener {
-            dialogHomeworkPicker.launch("*/*")
-        }
-
         val dialog = AlertDialog.Builder(this)
-            .setTitle("Submit ${item.title}")
-            .setView(dialogView)
-            .setNegativeButton("Cancel") { _, _ -> dialogFileSelectedText = null }
+            .setTitle(item.title)
+            .setMessage("${item.description}\n\nDue: ${item.dueDate}\n${classworkQualityText(item, studentUsername)}\n\nComplete this classwork in your notebook. Your teacher will check the hard copy at school and record quality feedback here.")
+            .setPositiveButton("Close", null)
             .create()
-
-        uploadBtn.setOnClickListener {
-            val uri = dialogSelectedFileUri
-            val fileName = dialogSelectedFileName
-            if (uri == null || fileName.isNullOrBlank()) {
-                Toast.makeText(this, "Choose a file before uploading", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            uploadBtn.isEnabled = false
-            uploadStudentHomework(item, fileName, uri) { success, message ->
-                runOnUiThread {
-                    Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
-                    uploadBtn.isEnabled = true
-                    if (success) {
-                        dialog.dismiss()
-                        bind()
-                    }
-                }
-            }
-        }
-
         if (teacherAttachmentUrls.isNotEmpty()) {
             dialog.setButton(AlertDialog.BUTTON_NEUTRAL, "Open teacher file") { _, _ ->
                 openAttachmentList(teacherAttachmentNames, teacherAttachmentUrls)
@@ -375,54 +313,6 @@ class StudentDetailActivity : BaseActivity() {
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL)?.let { neutralButton ->
             neutralButton.setTextColor(ContextCompat.getColor(this, android.R.color.white))
             neutralButton.backgroundTintList = ContextCompat.getColorStateList(this, R.color.brand_primary)
-        }
-    }
-
-    private fun uploadStudentHomework(
-        item: com.schoolms.mobile.data.HomeworkItem,
-        fileName: String,
-        uri: Uri,
-        callback: (Boolean, String) -> Unit
-    ) {
-        val user = SessionManager.currentUser ?: run {
-            callback(false, "Please log in again")
-            return
-        }
-        val storageRef = Firebase.storage.reference.child("homework_submissions/${System.currentTimeMillis()}_${fileName.replace("\\s+".toRegex(), "_")}")
-        val progressDialog = UploadProgressDialog(this, "Uploading homework")
-        progressDialog.show()
-        SessionManager.ensureFirebaseSession { authResult ->
-            authResult.onFailure {
-                progressDialog.dismiss()
-                callback(false, it.message ?: "Authentication required")
-            }
-                .onSuccess {
-                    val optimizedUri = prepareOptimizedUpload(uri, "homework_submission")
-                    val uploadTask = storageRef.putFile(optimizedUri)
-                    uploadTask
-                        .addOnProgressListener { snapshot ->
-                            val percent = if (snapshot.totalByteCount > 0) {
-                                ((snapshot.bytesTransferred * 100) / snapshot.totalByteCount).toInt()
-                            } else {
-                                0
-                            }
-                            progressDialog.update(1, 1, percent)
-                        }
-                        .continueWithTask { task ->
-                            if (!task.isSuccessful) throw task.exception ?: IllegalStateException("Upload failed")
-                            storageRef.downloadUrl
-                        }
-                        .addOnSuccessListener { downloadUri ->
-                            progressDialog.saving()
-                            val success = SchoolRepository.submitHomework(user, item.id, fileName, downloadUri.toString())
-                            progressDialog.dismiss()
-                            callback(success, if (success) "Homework submitted" else "Submission failed")
-                        }
-                        .addOnFailureListener {
-                            progressDialog.dismiss()
-                            callback(false, it.message ?: "Upload failed")
-                        }
-                }
         }
     }
 
@@ -453,15 +343,6 @@ class StudentDetailActivity : BaseActivity() {
             .setItems(labels.toTypedArray()) { _, which -> openAttachment(urls[which]) }
             .setNegativeButton("Close", null)
             .show()
-    }
-
-    private fun prepareOptimizedUpload(uri: Uri, cachePrefix: String): Uri {
-        val bitmap = contentResolver.openInputStream(uri)?.use { android.graphics.BitmapFactory.decodeStream(it) } ?: return uri
-        val file = File(cacheDir, "${cachePrefix}_${System.currentTimeMillis()}.jpg")
-        FileOutputStream(file).use { out ->
-            bitmap.compress(android.graphics.Bitmap.CompressFormat.JPEG, 82, out)
-        }
-        return Uri.fromFile(file)
     }
 
     private fun showAttendanceSummarySheet() {

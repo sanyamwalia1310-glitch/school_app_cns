@@ -281,7 +281,7 @@
                                 <TextView
                                     android:layout_width="wrap_content"
                                     android:layout_height="wrap_content"
-                                    android:text="Pending work"
+                                    android:text="Classwork"
                                     android:textColor="@android:color/white"
                                     android:textSize="13sp" />
 

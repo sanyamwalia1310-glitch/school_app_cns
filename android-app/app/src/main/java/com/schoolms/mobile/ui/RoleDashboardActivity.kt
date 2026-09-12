@@ -193,7 +193,7 @@ class RoleDashboardActivity : BaseActivity() {
         val attendanceRecord = SchoolRepository.attendanceForStudent(user.username)
         val marks = SchoolRepository.marksForStudent(user.username)
         val homework = SchoolRepository.homeworkForStudent(user.username)
-        val pendingHomework = homework.count { item -> item.submissions.none { it.studentUsername == user.username } }
+        val classworkCount = homework.size
         val latestGrade = marks.lastOrNull()?.grade ?: "--"
         val attendancePercent = if (attendanceRecord == null || attendanceRecord.totalDays == 0) {
             "0%"
@@ -203,7 +203,7 @@ class RoleDashboardActivity : BaseActivity() {
 
         findViewById<TextView>(R.id.studentClassValue).text = user.className.ifBlank { "Not set" }
         findViewById<TextView>(R.id.studentAttendanceValue).text = attendancePercent
-        findViewById<TextView>(R.id.studentHomeworkValue).text = pendingHomework.toString()
+        findViewById<TextView>(R.id.studentHomeworkValue).text = classworkCount.toString()
         findViewById<TextView>(R.id.studentMarksValue).text = latestGrade
 
         val classTeacher = SchoolRepository.teacherNameForClass(user.className)

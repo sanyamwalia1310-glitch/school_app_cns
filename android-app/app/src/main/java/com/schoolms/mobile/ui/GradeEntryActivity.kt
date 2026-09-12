@@ -50,6 +50,8 @@ class GradeEntryActivity : BaseActivity() {
     // selected.
     private var formDirty = false
     private var applyingFormState = false
+    private var requestedHomeworkAssessment = ""
+    private var requestedSubject = ""
 
     private val assessmentOptions = listOf("Term 1", "Term 2", "Term 3", "Custom")
 
@@ -91,6 +93,8 @@ class GradeEntryActivity : BaseActivity() {
         currentProfile = profile
         studentNameText.text = profile.fullName
         studentMetaText.text = "${profile.className} | Roll ${profile.rollNumber.ifBlank { "--" }}"
+        requestedHomeworkAssessment = intent.getStringExtra(EXTRA_HOMEWORK_ASSESSMENT).orEmpty()
+        requestedSubject = intent.getStringExtra(EXTRA_SUBJECT_NAME).orEmpty()
 
         subjectAdapter = ArrayAdapter(this, android.R.layout.simple_dropdown_item_1line, mutableListOf())
         subjectInput.setAdapter(subjectAdapter)
@@ -104,6 +108,7 @@ class GradeEntryActivity : BaseActivity() {
 
         inflateAssessmentForm()
         refreshSubjects(profile.className)
+        applyHomeworkAssessmentContext()
         bindHistory()
     }
 
@@ -251,6 +256,30 @@ class GradeEntryActivity : BaseActivity() {
         } finally {
             applyingFormState = false
         }
+    }
+
+    /** Pre-fill a 0–5 quality score when staff enter Marks from a classwork item. */
+    private fun applyHomeworkAssessmentContext() {
+        if (requestedHomeworkAssessment.isBlank()) return
+        val requested = requestedSubject.trim()
+        if (requested.isNotBlank() && (0 until subjectAdapter.count).any {
+                subjectAdapter.getItem(it).equals(requested, true)
+            }) {
+            currentSubject = requested
+            subjectInput.setText(requested, false)
+        }
+        applyingFormState = true
+        try {
+            assessmentInput?.setText("Custom", false)
+            customAssessmentLayout?.visibility = View.VISIBLE
+            customAssessmentInput?.setText(requestedHomeworkAssessment)
+            scoreInput?.setText("")
+            outOfInput?.setText("5")
+            statusView?.text = "Record classwork quality from 0 to 5 stars."
+        } finally {
+            applyingFormState = false
+        }
+        formDirty = true
     }
 
     private fun bindHistory() {
@@ -451,5 +480,7 @@ class GradeEntryActivity : BaseActivity() {
         const val EXTRA_CLASS_NAME = "extra_class_name"
         const val EXTRA_FULL_NAME = "extra_full_name"
         const val EXTRA_ROLL_NUMBER = "extra_roll_number"
+        const val EXTRA_HOMEWORK_ASSESSMENT = "extra_homework_assessment"
+        const val EXTRA_SUBJECT_NAME = "extra_subject_name"
     }
 }

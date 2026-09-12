@@ -2297,7 +2297,7 @@ object SchoolRepository {
     }
 
     private fun homeworkAnnouncement(): List<SimpleListItem> = listOf(
-        SimpleListItem("Homework portal active", "Teachers can assign work and students can submit files in-app.", "Update")
+        SimpleListItem("Classwork portal active", "Teachers post classwork; students complete hard copies and receive quality marks after review.", "Update")
     )
 
     fun facilities(): List<SimpleListItem> = facilityItems.toList()

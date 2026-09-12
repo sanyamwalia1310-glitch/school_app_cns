@@ -931,12 +931,16 @@ def notify_student_profiles(db, student_ids, *, title, body, event_type, destina
     """Send only profile-bound FCM messages; never use a topic for class work."""
     for student_id in set(student_ids):
         try:
-            send_profile_notification(
+            delivery = send_profile_notification(
                 db,
                 profile_user_id=student_id,
                 title=title,
                 body=body,
                 data={"event_type": event_type, "destination": destination, "content_id": content_id},
+            )
+            current_app.logger.info(
+                "Private %s notification for profile %s: delivered %s of %s registered device(s).",
+                event_type, student_id, delivery.delivered, delivery.attempted,
             )
         except FirebaseAuthProvisioningError:
             current_app.logger.warning("Content saved but private FCM delivery is unavailable.")

@@ -14,6 +14,7 @@ import com.schoolms.mobile.data.Role
 import com.schoolms.mobile.data.SchoolRepository
 import com.schoolms.mobile.data.SessionManager
 import com.schoolms.mobile.firebase.MessagingTopics
+import com.schoolms.mobile.firebase.SchoolMessagingService
 
 open class BaseActivity : AppCompatActivity() {
     private var shownUpdatePromptKey = ""
@@ -94,6 +95,7 @@ open class BaseActivity : AppCompatActivity() {
         ensureNotificationPermission()
         MessagingTopics.refreshUserTopics(SessionManager.currentUser)
         SessionManager.refreshFirebaseSessionSilently()
+        SchoolMessagingService.registerPrivateToken()
         if (SessionManager.currentUser?.role == Role.ADMIN) {
             SchoolRepository.ensureAdminSessionAccessIfNeeded { }
         }

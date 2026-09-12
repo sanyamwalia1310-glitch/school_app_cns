@@ -26,7 +26,11 @@ object NotificationHelper {
         }
 
         ensureChannel(context)
-        val destinationActivity = if (destination == "marks") MarksActivity::class.java else MainDashboardActivity::class.java
+        val destinationActivity = when (destination) {
+            "marks" -> MarksActivity::class.java
+            "homework" -> HomeworkActivity::class.java
+            else -> MainDashboardActivity::class.java
+        }
         val openAppIntent = Intent(context, destinationActivity).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             putExtra("notification_destination", destination)

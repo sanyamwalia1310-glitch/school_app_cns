@@ -93,7 +93,10 @@ class HomeworkActivity : BaseActivity() {
         setContentView(R.layout.activity_homework)
 
         val user = SessionManager.currentUser ?: return
-        setupToolbar(findViewById<MaterialToolbar>(R.id.toolbar), getString(R.string.homework_title))
+        setupToolbar(
+            findViewById<MaterialToolbar>(R.id.toolbar),
+            if (user.role == Role.STUDENT) "Classwork" else getString(R.string.homework_title)
+        )
 
         val studentHintText = findViewById<TextView>(R.id.studentHintText)
         val studentUploadActions = findViewById<View>(R.id.studentUploadActions)
@@ -184,20 +187,29 @@ class HomeworkActivity : BaseActivity() {
         currentStudentHomework = studentHomework
         val rows = studentHomework.map {
             SimpleListItem(
-                title = "${it.title} (${it.subject})",
-                subtitle = "${it.description}\nDue: ${it.dueDate}\nTeacher files: ${it.attachmentNames.ifEmpty { listOfNotNull(it.attachmentName) }.ifEmpty { listOf("No file") }.joinToString()}\nSubmit: bring your completed hard copy to school.",
-                badge = it.className
+                title = "Classwork • ${it.subject}",
+                subtitle = "${it.title}\n${it.description}\n${homeworkQuality(user, it)}",
+                badge = "Due ${it.dueDate}"
             )
         }
         adapter.updateItems(
             rows.ifEmpty {
                 listOf(SimpleListItem(
-                    "No homework assigned yet",
-                    "Your teacher has not assigned homework to ${user.className.ifBlank { "your class" }}.",
+                    "No classwork posted yet",
+                    "New classwork for ${user.className.ifBlank { "your class" }} will appear here.",
                     "Clear"
                 ))
             }
         )
+    }
+
+    private fun homeworkQuality(user: com.schoolms.mobile.data.User, homework: HomeworkItem): String {
+        val assessment = "Homework: ${homework.title}"
+        val mark = SchoolRepository.marksForStudent(user.username)
+            .lastOrNull { it.subject.equals(homework.subject, true) && it.assessment.equals(assessment, true) }
+            ?: return "Teacher review: Not graded yet"
+        val rating = ((mark.score.toDouble() / mark.outOf.coerceAtLeast(1)) * 5).toInt().coerceIn(0, 5)
+        return "Teacher quality: ${"★".repeat(rating)}${"☆".repeat(5 - rating)}  ${mark.score}/${mark.outOf}"
     }
 
     private fun bindTeacherHomework(user: com.schoolms.mobile.data.User) {
@@ -488,6 +500,8 @@ class HomeworkActivity : BaseActivity() {
                     Intent(this, ClassRecordsActivity::class.java)
                         .putExtra(ClassRecordsActivity.EXTRA_MODE, ClassRecordsActivity.MODE_MARKS)
                         .putExtra(ClassRecordsActivity.EXTRA_CLASS_NAME, item.className)
+                        .putExtra(ClassRecordsActivity.EXTRA_HOMEWORK_ASSESSMENT, "Homework: ${item.title}")
+                        .putExtra(ClassRecordsActivity.EXTRA_HOMEWORK_SUBJECT, item.subject)
                 )
             }
             .show()
@@ -574,6 +588,7 @@ class HomeworkActivity : BaseActivity() {
         }
 
     private fun showStudentHomeworkDialog(homework: HomeworkItem) {
+        val user = SessionManager.currentUser ?: return
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(36, 18, 36, 8)
@@ -586,7 +601,7 @@ class HomeworkActivity : BaseActivity() {
         }
         val detailView = TextView(this).apply {
             val teacherFiles = homework.attachmentNames.ifEmpty { listOfNotNull(homework.attachmentName) }
-            text = "${homework.subject} | ${homework.className}\nDue: ${homework.dueDate}\n${homework.description}\n\nTeacher attachments: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\n\nComplete this work on the required hard copy or in your notebook and bring it to school. Your teacher will check it offline and record marks in the Marks section. Online student uploads are not used."
+            text = "${homework.subject} | ${homework.className}\nDue: ${homework.dueDate}\n${homework.description}\n\n${homeworkQuality(user, homework)}\n\nTeacher attachments: ${teacherFiles.ifEmpty { listOf("No file") }.joinToString()}\n\nComplete this work on the required hard copy or in your notebook and bring it to school. Your teacher will check it offline and record your quality in the Marks section."
             textSize = 14f
             setTextColor(ContextCompat.getColor(this@HomeworkActivity, R.color.text_secondary))
             setPadding(0, 12, 0, 14)

@@ -323,6 +323,8 @@ class ClassRecordsActivity : BaseActivity() {
                             .putExtra(GradeEntryActivity.EXTRA_CLASS_NAME, className)
                             .putExtra(GradeEntryActivity.EXTRA_FULL_NAME, student.fullName)
                             .putExtra(GradeEntryActivity.EXTRA_ROLL_NUMBER, student.rollNumber)
+                            .putExtra(GradeEntryActivity.EXTRA_HOMEWORK_ASSESSMENT, intent.getStringExtra(EXTRA_HOMEWORK_ASSESSMENT))
+                            .putExtra(GradeEntryActivity.EXTRA_SUBJECT_NAME, intent.getStringExtra(EXTRA_HOMEWORK_SUBJECT))
                     )
                 }
             }
@@ -395,6 +397,8 @@ class ClassRecordsActivity : BaseActivity() {
         const val EXTRA_MODE = "mode"
         const val EXTRA_OPEN_HOMEWORK_COMPOSER = "open_homework_composer"
         const val EXTRA_EDIT_HOMEWORK_ID = "edit_homework_id"
+        const val EXTRA_HOMEWORK_ASSESSMENT = "homework_assessment"
+        const val EXTRA_HOMEWORK_SUBJECT = "homework_subject"
         const val MODE_PROFILES = "Profiles"
         const val MODE_ATTENDANCE = "Attendance"
         const val MODE_MARKS = "Marks"
@@ -587,6 +591,8 @@ class ClassRecordsActivity : BaseActivity() {
                     Intent(this, ClassRecordsActivity::class.java)
                         .putExtra(EXTRA_MODE, MODE_MARKS)
                         .putExtra(EXTRA_CLASS_NAME, item.className)
+                        .putExtra(EXTRA_HOMEWORK_ASSESSMENT, "Homework: ${item.title}")
+                        .putExtra(EXTRA_HOMEWORK_SUBJECT, item.subject)
                 )
             }
             .show()

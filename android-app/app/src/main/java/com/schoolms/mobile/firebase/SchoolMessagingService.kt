@@ -13,19 +13,7 @@ class SchoolMessagingService : FirebaseMessagingService() {
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         MessagingTopics.refreshUserTopics(SessionManager.currentUser)
-        registerPrivateToken(token)
-    }
-
-    /** Flask verifies the Firebase UID can use this exact selected school profile. */
-    fun registerPrivateToken(token: String? = null) {
-        val profileId = SessionManager.activeProfileId ?: return
-        val firebaseUser = FirebaseAuth.getInstance().currentUser ?: return
-        val register: (String) -> Unit = { deviceToken ->
-            firebaseUser.getIdToken(false).addOnSuccessListener { idToken ->
-                FlaskEmailGateway.registerFcmToken(idToken.token.orEmpty(), profileId, deviceToken) { }
-            }
-        }
-        if (token.isNullOrBlank()) FirebaseMessaging.getInstance().token.addOnSuccessListener(register) else register(token)
+        Companion.registerPrivateToken(token)
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
@@ -47,6 +35,20 @@ class SchoolMessagingService : FirebaseMessagingService() {
         if (allowed) {
             SchoolRepository.refreshSharedStateOnce { }
             SchoolRepository.refreshPrivateAcademicContent { }
+        }
+    }
+
+    companion object {
+        /** Flask binds this device token to exactly the active, authorized profile. */
+        fun registerPrivateToken(token: String? = null) {
+            val profileId = SessionManager.activeProfileId ?: return
+            val firebaseUser = FirebaseAuth.getInstance().currentUser ?: return
+            val register: (String) -> Unit = { deviceToken ->
+                firebaseUser.getIdToken(false).addOnSuccessListener { idToken ->
+                    FlaskEmailGateway.registerFcmToken(idToken.token.orEmpty(), profileId, deviceToken) { }
+                }
+            }
+            if (token.isNullOrBlank()) FirebaseMessaging.getInstance().token.addOnSuccessListener(register) else register(token)
         }
     }
 }
